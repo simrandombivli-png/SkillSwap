@@ -1,20 +1,8 @@
-from datetime import datetime
-from typing import List, Optional
-from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import Column, Float, Integer, String, Text, create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
-app = FastAPI(
-    title="SkillSwap API",
-    description="Peer-to-Peer Student Time Bank with MySQL Integration",
-    version="1.0",
-)
-
-# ============================================================
-# 1. MYSQL DATABASE CONNECTIVITY
-# ============================================================
+# MySQL Database URL
 DATABASE_URL = "mysql+pymysql://root:1025147@localhost:3306/skillswap_db"
 
 engine = create_engine(DATABASE_URL)
@@ -22,9 +10,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-# ============================================================
-# 2. SQL ALCHEMY MODELS (Automatically creates tables in MySQL)
-# ============================================================
+# Database Models (Tables)
 class UserModel(Base):
   __tablename__ = "users"
   id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -37,7 +23,39 @@ class UserModel(Base):
   rating_count = Column(Integer, default=0)
 
 
-# Automatically builds tables in MySQL when the application boots up
+class SkillModel(Base):
+  __tablename__ = "skills"
+  id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+  user_id = Column(Integer, nullable=False)
+  skill_name = Column(String(100), nullable=False)
+  skill_type = Column(String(50), nullable=False)
+
+
+class BookingModel(Base):
+  __tablename__ = "bookings"
+  id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+  student_id = Column(Integer, nullable=False)
+  tutor_id = Column(Integer, nullable=False)
+  skill_id = Column(Integer, nullable=False)
+  date = Column(String(50), nullable=False)
+  start_time = Column(String(50), nullable=False)
+  duration = Column(Integer, nullable=False)
+  credits = Column(Integer, nullable=False)
+  status = Column(String(50), default="pending")
+  created_at = Column(String(100), nullable=False)
+
+
+class TransactionModel(Base):
+  __tablename__ = "transactions"
+  id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+  user_id = Column(Integer, nullable=False)
+  type = Column(String(50), nullable=False)
+  amount = Column(Integer, nullable=False)
+  booking_id = Column(Integer, nullable=False)
+  timestamp = Column(String(100), nullable=False)
+
+
+# Create tables in MySQL automatically
 Base.metadata.create_all(bind=engine)
 
 
@@ -46,76 +64,4 @@ def get_db():
   try:
     yield db
   finally:
-    db.close()
-
-
-# ============================================================
-# 3. REQUEST MODELS (Pydantic)
-# ============================================================
-class UserCreate(BaseModel):
-  name: str
-  email: str
-  department: str
-  availability: List[str] = []
-
-
-# ============================================================
-# 4. HOME & USER ENDPOINTS
-# ============================================================
-@app.get("/")
-def home():
-  return {
-      "message": "SkillSwap API is running with MySQL Database",
-      "status": "success",
-  }
-
-
-@app.post("/users")
-def create_user(user: UserCreate, db: Session = Depends(get_db)):
-  # Check if email already exists in MySQL
-  existing_user = (
-      db.query(UserModel).filter(UserModel.email == user.email).first()
-  )
-  if existing_user:
-    raise HTTPException(status_code=400, detail="Email already registered")
-
-  # Create a new user record for MySQL
-  new_user = UserModel(
-      name=user.name,
-      email=user.email,
-      department=user.department,
-      availability=",".join(user.availability),
-      credits=5,
-      rating=0.0,
-      rating_count=0,
-  )
-
-  db.add(new_user)
-  db.commit()
-  db.refresh(new_user)
-
-  return {
-      "message": "User registered successfully in MySQL!",
-      "user": {
-          "id": new_user.id,
-          "name": new_user.name,
-          "email": new_user.email,
-          "department": new_user.department,
-          "credits": new_user.credits,
-      },
-  }
-
-
-@app.get("/users/{user_id}")
-def get_user(user_id: int, db: Session = Depends(get_db)):
-  user = db.query(UserModel).filter(UserModel.id == user_id).first()
-  if not user:
-    raise HTTPException(status_code=404, detail="User not found")
-  return {
-      "id": user.id,
-      "name": user.name,
-      "email": user.email,
-      "department": user.department,
-      "credits": user.credits,
-      "rating": user.rating,
-  }
+  db.close()
