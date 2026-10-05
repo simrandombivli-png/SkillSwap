@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
-
+from connectivity import SessionLocal, get_db, UserModel, SkillModel, BookingModel, TransactionModel
 app = FastAPI(
     title="SkillSwap API",
     description="Peer-to-Peer Student Time Bank",
