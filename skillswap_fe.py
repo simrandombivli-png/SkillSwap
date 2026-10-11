@@ -1,58 +1,13 @@
-"""
-SkillSwap - frontend, built on firstpg.py (your existing Login/Register).
-Run:  python skillswap_app.py
-
-Login/Register kept exactly as you wrote them (Register posts to your
-FastAPI backend). Everything else runs on local mock data (MOCK_DB below)
-so you can build/demo without the backend running.
-
-Covers every feature from the proposal PDF:
-- Dual Skill Registry (Offered AND Requested)
-- Peer Matcher with skill/availability/rating filters
-- Session Booking with date + time + duration (1 or 2 hrs)
-- Escrow Credit System (wallet shows Available vs In escrow separately)
-- Escalation & Dispute Portal
-- Review/rating after a completed session
-- Exchange Analytics (hours given vs received, simple bar chart via Canvas)
-
-====================================================================
-TODO FOR CONNECTIVITY (read before wiring this to the real backend)
-====================================================================
-1. state["uid"] is hardcoded to 1 below. There is no /login endpoint in
-   main.py yet, so this file can't know who actually logged in. Once a
-   login endpoint exists, set state["uid"] from its response instead of
-   the hardcoded 1 (see show_login()'s fun()).
-2. Every function that reads/writes MOCK_DB is where a real API call
-   needs to go instead. MOCK_DB's shape mirrors main.py's data closely
-   but field names differ in places - map them when swapping in requests
-   calls, e.g.:
-     MOCK_DB            <->  backend (main.py / skillswap.sql)
-     user["credits"]    <->  GET /users/{id}/credits
-     bookings           <->  GET /users/{id}/bookings, POST /bookings
-     booking["learner"] <->  booking["student_id"]
-     booking["teacher"] <->  booking["tutor_id"]
-     booking["hours"]   <->  booking["duration"]
-     user_skills        <->  POST /users/{id}/skills (skill_type: offered/requested)
-3. Screens don't need to change structurally - only the data-access lines
-   inside each page_*() function (the parts touching MOCK_DB) need to
-   become requests.get/post calls once endpoints exist for them (most do
-   already in main.py; dispute/review endpoints exist too).
-4. No secrets live in this file. connectivity.py in the repo DOES have a
-   hardcoded MySQL password - flag that to be moved to an env var/.env
-   before this repo is shared more widely.
-"""
 from tkinter import *
 from tkinter import ttk, messagebox
 import requests  # used by Register, same as your firstpg.py
-
-# ---------------- THEME ----------------
+#THEME 
 BG, PANEL, ACCENT, ACCENT2 = "#F4F8FB", "#FFFFFF", "#2E6F95", "#F0A868"
 TEXT, MUTED = "#1B2B34", "#7A8B96"
 FONT, FONT_B, FONT_H = ("Segoe UI", 10), ("Segoe UI", 10, "bold"), ("Segoe UI", 16, "bold")
 STATUS_BG = {"pending": "#FCEEDD", "confirmed": "#E3EEF4", "completed": "#E5F2EA", "cancelled": "#FBEAE9", "disputed": "#FBEAE9"}
 STATUS_FG = {"pending": "#B5762E", "confirmed": "#24567A", "completed": "#2F7A4C", "cancelled": "#A8382E", "disputed": "#A8382E"}
-
-# ---------------- MOCK DATA ----------------
+#MOCK DATA 
 MOCK_DB = {
     "users": {
         1: {"name": "Riya Shah", "email": "riya@college.edu", "credits": 5, "rating": 4.6, "rating_count": 3},
@@ -78,33 +33,23 @@ MOCK_DB = {
     "next_id": 4,
 }
 state = {"uid": 1}
-
-# ---------------- ROOT WINDOW ----------------
+# ROOT WINDOW
 top = Tk()
 top.title("SkillSwap")
 top.geometry("400x450")
 top.configure(bg=BG)
-
 style = ttk.Style(top)
 style.theme_use("clam")
 style.configure("Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT, rowheight=26, font=FONT)
 style.configure("Treeview.Heading", background=BG, foreground=MUTED, font=FONT_B)
 style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "#FFFFFF")])
-
-
 def clear():
     for widget in top.winfo_children():
         widget.destroy()
-
-
 def credits_locked(uid):
     """Credits currently held in escrow for this user's pending/confirmed bookings as learner."""
     return sum(b["hours"] for b in MOCK_DB["bookings"] if b["learner"] == uid and b["status"] in ("pending", "confirmed"))
-
-
-# ============================================================
-# LOGIN -- unchanged from firstpg.py, success now opens show_main()
-# ============================================================
+# LOGIN 
 def show_login():
     clear()
     top.title("SkillSwap - Login")
@@ -120,29 +65,21 @@ def show_login():
     Label(form, text="Password", bg="light yellow", height=1, width=10, bd=10, font=("Segoe UI", 15)).grid(row=2, column=0, padx=10, pady=10)
     e2 = Entry(form, width=30, show="*", fg="red")
     e2.grid(row=2, column=1)
-
     def fun():
         if e1.get() and e2.get():
             messagebox.showinfo("Success", "Login successful!")
             show_main()
         else:
             messagebox.showerror("Warning", "Fill all Fields!")
-
     Button(form, text="Login", bg="sky blue", activebackground="yellow", command=fun).grid(row=3, column=0, columnspan=2, pady=10)
     Button(form, text="Create an account", command=show_register).grid(row=4, column=0, columnspan=2, pady=5)
-
-
-# ============================================================
-# REGISTER -- unchanged from firstpg.py, still posts to backend
-# ============================================================
+# REGISTER 
 def show_register():
     clear()
     top.title("SkillSwap - Register")
     top.geometry("400x420")
-
     form = Frame(top, bg=BG)
     form.place(relx=0.5, rely=0.5, anchor="center")
-
     Label(form, text="Create Account", bg="#2E6F95", fg="white", height=1, width=14, bd=10, font=("Segoe UI", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=10)
     Label(form, text="Name : ", bg="light yellow", height=1, width=10, bd=5, font=("Segoe UI", 11)).grid(row=1, column=0, padx=5, pady=5)
     e1 = Entry(form, width=25)
@@ -156,7 +93,6 @@ def show_register():
     Label(form, text="Password : ", bg="light yellow", height=1, width=10, bd=5, font=("Segoe UI", 11)).grid(row=4, column=0, padx=5, pady=5)
     e3 = Entry(form, width=25, show="*", fg="red")
     e3.grid(row=4, column=1)
-
     def fun():
         name, email, department, password = e1.get(), e2.get(), e_dept.get(), e3.get()
         if name and email and department and password:
@@ -175,29 +111,21 @@ def show_register():
 
     Button(form, text="Register", bg="sky blue", activebackground="yellow", command=fun).grid(row=5, column=0, columnspan=2, pady=10)
     Button(form, text="Back to login", command=show_login).grid(row=6, column=0, columnspan=2)
-
-
-# ============================================================
 # MAIN SHELL
-# ============================================================
 body = None
 title_lbl = None
 credit_lbl = None
 nav_btns = {}
-
-
 def show_main():
     global body, title_lbl, credit_lbl, nav_btns
     clear()
     top.title("SkillSwap")
     top.geometry("1040x620")
     top.configure(bg=BG)
-
     side = Frame(top, bg=PANEL, width=190)
     side.pack(side="left", fill="y")
     side.pack_propagate(False)
     Label(side, text="SkillSwap", bg=PANEL, fg=TEXT, font=FONT_H, pady=20).pack()
-
     nav_btns = {}
     pages = [
         ("browse", "Find a peer", page_browse),
@@ -225,10 +153,7 @@ def show_main():
     credit_lbl.pack(side="right")
     body = Frame(right, bg=BG)
     body.pack(fill="both", expand=True, padx=20)
-
     goto("browse", page_browse)
-
-
 def goto(key, page_fn):
     for k, b in nav_btns.items():
         b.configure(bg=ACCENT if k == key else PANEL, fg="#FFFFFF" if k == key else MUTED)
@@ -238,11 +163,7 @@ def goto(key, page_fn):
     locked = credits_locked(state["uid"])
     credit_lbl.config(text=f"{u['credits']} available  |  {locked} in escrow")
     page_fn()
-
-
-# ============================================================
 # PEER MATCHER -- skill + availability + min rating filters
-# ============================================================
 def page_browse():
     title_lbl.config(text="Find a peer")
     uid = state["uid"]
@@ -260,7 +181,6 @@ def page_browse():
     minr = ttk.Combobox(bar, values=["Any", "3.0", "4.0", "4.5"], state="readonly", width=8)
     minr.set("Any")
     minr.grid(row=1, column=2, padx=(0, 10))
-
     rows_holder = {}
     cols = ("teacher", "skill", "level", "rating", "availability")
     t = ttk.Treeview(body, columns=cols, show="headings", height=8)
@@ -268,7 +188,6 @@ def page_browse():
         t.heading(c, text=c.title())
         t.column(c, width=130)
     t.pack(fill="both", expand=True, pady=10)
-
     def load():
         for i in list(t.get_children()):
             t.delete(i)
@@ -287,16 +206,13 @@ def page_browse():
             iid = f"{u}-{sid}"
             rows_holder[iid] = (u, teacher["name"], sid, sname, level)
             t.insert("", "end", iid=iid, values=(teacher["name"], sname, level, teacher["rating"], a))
-
     Button(bar, text="Search", command=load).grid(row=1, column=3, padx=(4, 0))
     load()
-
     def request_session():
         sel = t.selection()
         if not sel:
             return messagebox.showwarning("Pick a teacher", "Select a row first.")
         tid, tname, sid, sname, level = rows_holder[sel[0]]
-
         win = Toplevel(top, bg=PANEL)
         win.title("Book session")
         f = Frame(win, bg=PANEL, padx=20, pady=16)
@@ -314,7 +230,6 @@ def page_browse():
         dur = ttk.Combobox(f, values=["1", "2"], state="readonly", width=5)
         dur.set("1")
         dur.pack(anchor="w")
-
         def confirm():
             date, tm = e_date.get().strip(), e_time.get().strip()
             if not date or not tm:
@@ -334,20 +249,14 @@ def page_browse():
             win.destroy()
             messagebox.showinfo("Booked", f"{h} credit(s) placed in escrow. Waiting for {tname} to confirm.")
             goto("browse", page_browse)
-
         Button(f, text="Book (places credits in escrow)", bg="sky blue", command=confirm).pack(fill="x", pady=(12, 4))
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
-
     Button(body, text="Book session", bg="sky blue", activebackground="yellow", command=request_session).pack(anchor="w")
 
-
-# ============================================================
-# MY SKILLS -- Offered AND Requested (Dual Skill Registry)
-# ============================================================
+# MY SKILLS 
 def page_myskills():
     title_lbl.config(text="My skills")
     uid = state["uid"]
-
     f = Frame(body, bg=BG)
     f.pack(anchor="w", fill="x")
     Label(f, text="Skill", bg=BG, fg=MUTED).grid(row=0, column=0, sticky="w")
@@ -361,7 +270,6 @@ def page_myskills():
     cl = ttk.Combobox(f, values=["Beginner", "Intermediate", "Expert"], state="readonly", width=14)
     cl.set("Intermediate")
     cl.grid(row=1, column=2, pady=(2, 10), sticky="w", padx=(16, 0))
-
     def add():
         if not cs.get():
             return messagebox.showwarning("Pick a skill", "Choose a skill first.")
@@ -373,12 +281,9 @@ def page_myskills():
         MOCK_DB["user_skills"].append((uid, sid, typ, level))
         messagebox.showinfo("Added", f"Added to your {typ} skills.")
         goto("myskills", page_myskills)
-
     Button(body, text="Add", bg="sky blue", command=add).pack(anchor="w", pady=(0, 10))
-
     cols_frame = Frame(body, bg=BG)
     cols_frame.pack(fill="both", expand=True)
-
     offered = Frame(cols_frame, bg=BG)
     offered.pack(side="left", fill="both", expand=True, padx=(0, 10))
     Label(offered, text="Offered", bg=BG, fg=TEXT, font=FONT_B).pack(anchor="w")
@@ -389,7 +294,6 @@ def page_myskills():
         if u == uid and typ == "offered":
             t1.insert("", "end", iid=i, values=(MOCK_DB["skills"][s], lvl))
     t1.pack(fill="both", expand=True)
-
     requested = Frame(cols_frame, bg=BG)
     requested.pack(side="left", fill="both", expand=True)
     Label(requested, text="Requested (help needed)", bg=BG, fg=TEXT, font=FONT_B).pack(anchor="w")
@@ -399,17 +303,12 @@ def page_myskills():
         if u == uid and typ == "requested":
             t2.insert("", "end", iid=i, values=(MOCK_DB["skills"][s],))
     t2.pack(fill="both", expand=True)
-
-
-# ============================================================
-# MY SESSIONS -- confirm / complete / dispute / review
-# ============================================================
+# MY SESSIONS 
 def page_sessions():
     title_lbl.config(text="My sessions")
     uid = state["uid"]
     rows = [s for s in MOCK_DB["bookings"] if uid in (s["learner"], s["teacher"])]
     rows.sort(key=lambda r: -r["id"])
-
     cols = ("learner", "teacher", "skill", "date", "time", "hours", "status")
     t = ttk.Treeview(body, columns=cols, show="headings", height=9)
     for c in cols:
@@ -419,27 +318,22 @@ def page_sessions():
         t.insert("", "end", iid=s["id"], values=(MOCK_DB["users"][s["learner"]]["name"], MOCK_DB["users"][s["teacher"]]["name"],
                  MOCK_DB["skills"][s["skill"]], s["date"], s["time"], s["hours"], s["status"].title()))
     t.pack(fill="both", expand=True, pady=8)
-
     legend = Frame(body, bg=BG)
     legend.pack(anchor="w", pady=(0, 8))
     for s in STATUS_BG:
         Label(legend, text=f"  {s.title()}  ", bg=STATUS_BG[s], fg=STATUS_FG[s], font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
-
     by_id = {s["id"]: s for s in rows}
-
     def act(fn):
         sel = t.selection()
         if not sel:
             return messagebox.showwarning("Pick a session", "Select a row first.")
         fn(by_id[int(sel[0])])
-
     def do_confirm(s):
         if s["teacher"] == uid and s["status"] == "pending":
             s["status"] = "confirmed"
             goto("sessions", page_sessions)
         else:
             messagebox.showwarning("Not allowed", "Only the teacher can confirm a pending session.")
-
     def do_complete(s):
         if s["learner"] != uid or s["status"] != "confirmed":
             return messagebox.showwarning("Not allowed", "Only the learner can complete a confirmed session.")
@@ -448,7 +342,6 @@ def page_sessions():
         s["status"] = "completed"
         messagebox.showinfo("Done", f"{s['hours']} credit(s) released to {MOCK_DB['users'][s['teacher']]['name']}.")
         goto("sessions", page_sessions)
-
     def do_dispute(s):
         if s["status"] == "completed":
             return messagebox.showwarning("Not allowed", "Cannot dispute a completed session.")
@@ -460,7 +353,6 @@ def page_sessions():
         Label(f, text="What happened?", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(8, 2))
         reason = Text(f, width=34, height=4)
         reason.pack()
-
         def submit():
             r = reason.get("1.0", "end").strip()
             if not r:
@@ -470,10 +362,8 @@ def page_sessions():
             win.destroy()
             messagebox.showinfo("Reported", "Dispute submitted. Credits stay in escrow until resolved.")
             goto("sessions", page_sessions)
-
         Button(f, text="Submit dispute", bg="sky blue", command=submit).pack(fill="x", pady=(10, 4))
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
-
     def do_review(s):
         if s["learner"] != uid or s["status"] != "completed":
             return messagebox.showwarning("Not allowed", "You can only review your own completed sessions.")
@@ -489,7 +379,6 @@ def page_sessions():
         rating.pack(anchor="w", pady=(8, 2))
         comment = Entry(f, width=34)
         comment.pack(anchor="w", pady=(4, 0))
-
         def submit():
             rt = int(rating.get())
             tutor = MOCK_DB["users"][s["teacher"]]
@@ -498,27 +387,20 @@ def page_sessions():
             MOCK_DB["reviews"].append({"booking_id": s["id"], "rating": rt, "comment": comment.get()})
             win.destroy()
             messagebox.showinfo("Thanks", "Review submitted.")
-
         Button(f, text="Submit review", bg="sky blue", command=submit).pack(fill="x", pady=(10, 4))
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
-
     bar = Frame(body, bg=BG)
     bar.pack(anchor="w")
     Button(bar, text="Confirm", command=lambda: act(do_confirm)).pack(side="left", padx=(0, 6))
     Button(bar, text="Mark completed", bg="sky blue", command=lambda: act(do_complete)).pack(side="left", padx=(0, 6))
     Button(bar, text="Report issue", fg="#A8382E", command=lambda: act(do_dispute)).pack(side="left", padx=(0, 6))
     Button(bar, text="Review", command=lambda: act(do_review)).pack(side="left")
-
-
-# ============================================================
-# WALLET -- available vs escrow, transaction ledger
-# ============================================================
+# WALLET 
 def page_wallet():
     title_lbl.config(text="Wallet")
     uid = state["uid"]
     u = MOCK_DB["users"][uid]
     locked = credits_locked(uid)
-
     cards = Frame(body, bg=BG)
     cards.pack(fill="x", pady=(0, 12))
     for label, value, color in [("AVAILABLE", u["credits"], ACCENT), ("IN ESCROW", locked, ACCENT2)]:
@@ -526,7 +408,6 @@ def page_wallet():
         c.pack(side="left", fill="x", expand=True, padx=(0, 10))
         Label(c, text=label, bg=PANEL, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
         Label(c, text=f"{value} credits", bg=PANEL, fg=color, font=("Segoe UI", 20, "bold")).pack(anchor="w")
-
     rows = [t for t in MOCK_DB["transactions"] if uid in (t["from"], t["to"])][::-1]
     t = ttk.Treeview(body, columns=("from", "to", "amount", "type", "date"), show="headings", height=8)
     for c in ("from", "to", "amount", "type", "date"):
@@ -535,17 +416,12 @@ def page_wallet():
         amt = f"-{r['amount']}" if r["from"] == uid else f"+{r['amount']}"
         t.insert("", "end", iid=i, values=(MOCK_DB["users"][r["from"]]["name"], MOCK_DB["users"][r["to"]]["name"], amt, r["type"], r["date"]))
     t.pack(fill="both", expand=True)
-
-
-# ============================================================
 # EXCHANGE ANALYTICS -- hours taught vs received, simple bar chart
-# ============================================================
 def page_analytics():
     title_lbl.config(text="Analytics")
     uid = state["uid"]
     taught = sum(b["hours"] for b in MOCK_DB["bookings"] if b["teacher"] == uid and b["status"] == "completed")
     received = sum(b["hours"] for b in MOCK_DB["bookings"] if b["learner"] == uid and b["status"] == "completed")
-
     cards = Frame(body, bg=BG)
     cards.pack(fill="x", pady=(0, 16))
     for label, value in [("HOURS TAUGHT", taught), ("HOURS RECEIVED", received), ("NET BALANCE", received - taught)]:
@@ -553,7 +429,6 @@ def page_analytics():
         c.pack(side="left", fill="x", expand=True, padx=(0, 10))
         Label(c, text=label, bg=PANEL, fg=MUTED, font=("Segoe UI", 8, "bold")).pack(anchor="w")
         Label(c, text=str(value), bg=PANEL, fg=ACCENT, font=("Segoe UI", 20, "bold")).pack(anchor="w")
-
     canvas = Canvas(body, width=300, height=180, bg=PANEL, highlightthickness=0)
     canvas.pack(anchor="w", pady=10)
     maxv = max(taught, received, 1)
@@ -564,8 +439,6 @@ def page_analytics():
     canvas.create_text(100, 165, text="Taught", fill=TEXT, font=FONT)
     canvas.create_rectangle(180, 150 - h2, 180 + bar_w, 150, fill=ACCENT2, outline="")
     canvas.create_text(220, 165, text="Received", fill=TEXT, font=FONT)
-
-
 def page_top():
     title_lbl.config(text="Top teachers")
     counts = {}
@@ -583,8 +456,6 @@ def page_top():
     for i, r in enumerate(rows):
         t.insert("", "end", iid=i, values=(i + 1, r["name"], r["n"], r["h"], r["rating"]))
     t.pack(fill="both", expand=True)
-
-
-# ---------------- START ----------------
+# START 
 show_login()
 top.mainloop()
