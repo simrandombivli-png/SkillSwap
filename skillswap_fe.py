@@ -1,3 +1,4 @@
+from datetime import datetime
 from tkinter import *
 from tkinter import ttk, messagebox
 import requests  # used by Register, same as your firstpg.py
@@ -10,7 +11,7 @@ STATUS_FG = {"pending": "#B5762E", "confirmed": "#24567A", "completed": "#2F7A4C
 #MOCK DATA 
 MOCK_DB = {
     "users": {
-        1: {"name": "Riya Shah", "email": "riya@college.edu", "credits": 5, "rating": 4.6, "rating_count": 3},
+        1: {"name": "Riya Shah", "email": "riya@college.edu", "credits": 2, "rating": 4.6, "rating_count": 3},
         2: {"name": "Aman Verma", "email": "aman@college.edu", "credits": 9, "rating": 4.8, "rating_count": 5},
         3: {"name": "Neha Patil", "email": "neha@college.edu", "credits": 6, "rating": 4.3, "rating_count": 2},
     },
@@ -47,8 +48,8 @@ def clear():
     for widget in top.winfo_children():
         widget.destroy()
 def credits_locked(uid):
-    """Credits currently held in escrow for this user's pending/confirmed bookings as learner."""
-    return sum(b["hours"] for b in MOCK_DB["bookings"] if b["learner"] == uid and b["status"] in ("pending", "confirmed"))
+    return sum(b["hours"] for b in MOCK_DB["bookings"]
+               if b["learner"] == uid and b["status"] in ("pending", "confirmed", "disputed"))
 # LOGIN 
 def show_login():
     clear()
@@ -66,11 +67,15 @@ def show_login():
     e2 = Entry(form, width=30, show="*", fg="red")
     e2.grid(row=2, column=1)
     def fun():
-        if e1.get() and e2.get():
-            messagebox.showinfo("Success", "Login successful!")
-            show_main()
+        email = e1.get().strip().lower()
+        uid = next((i for i, u in MOCK_DB["users"].items() if u["email"].lower() == email), None)
+        if not e2.get():
+           messagebox.showerror("Warning", "Fill all Fields!")
+        elif uid is None:
+           messagebox.showerror("Login failed", "Unknown email. Try riya@college.edu or aman@college.edu")
         else:
-            messagebox.showerror("Warning", "Fill all Fields!")
+          state["uid"] = uid
+          show_main()
     Button(form, text="Login", bg="sky blue", activebackground="yellow", command=fun).grid(row=3, column=0, columnspan=2, pady=10)
     Button(form, text="Create an account", command=show_register).grid(row=4, column=0, columnspan=2, pady=5)
 # REGISTER 
@@ -98,10 +103,12 @@ def show_register():
         if name and email and department and password:
             payload = {"name": name, "email": email, "department": department, "availability": ["Mon-Evening"]}
             try:
-                response = requests.post("http://127.0.0.1:8000/users", json=payload)
+                response = requests.post("http://127.0.0.1:8000/users", json=payload, timeout=5)
                 if response.status_code == 200:
-                    messagebox.showinfo("Success", "Registered successfully in MySQL database!")
-                    show_login()
+                   u = response.json()["user"]
+                   MOCK_DB["users"][1000 + u["id"]] = {"name": u["name"], "email": u["email"], "credits": u["credits"], "rating": 0.0, "rating_count": 0}
+                   messagebox.showinfo("Success", "Registered successfully in MySQL database!")
+                   show_login()
                 else:
                     messagebox.showerror("Error", response.json().get("detail", "Registration failed"))
             except requests.exceptions.ConnectionError:
@@ -232,8 +239,12 @@ def page_browse():
         dur.pack(anchor="w")
         def confirm():
             date, tm = e_date.get().strip(), e_time.get().strip()
-            if not date or not tm:
-                return messagebox.showerror("Invalid", "Enter a date and time.")
+            try:
+                when = datetime.strptime(f"{date} {tm}", "%Y-%m-%d %H:%M")
+            except ValueError:
+                return messagebox.showerror("Invalid", "Use date YYYY-MM-DD and time HH:MM.")
+            if when < datetime.now():
+                return messagebox.showerror("Invalid", "Choose a future date and time.")
             h = int(dur.get())
             bal = MOCK_DB["users"][uid]["credits"]
             if bal < h:
@@ -243,6 +254,7 @@ def page_browse():
                     continue
                 if b["date"] == date and b["time"] == tm and (b["learner"] == uid or b["teacher"] == tid):
                     return messagebox.showerror("Conflict", "You or the tutor already have a booking at that time.")
+            MOCK_DB["users"][uid]["credits"] -= h        # NEW: lock credits in escrow
             MOCK_DB["bookings"].append({"id": MOCK_DB["next_id"], "learner": uid, "teacher": tid, "skill": sid,
                                         "date": date, "time": tm, "hours": h, "status": "pending"})
             MOCK_DB["next_id"] += 1
@@ -389,12 +401,20 @@ def page_sessions():
             messagebox.showinfo("Thanks", "Review submitted.")
         Button(f, text="Submit review", bg="sky blue", command=submit).pack(fill="x", pady=(10, 4))
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
+    def do_cancel(s):
+        if s["learner"] != uid or s["status"] != "pending":
+            return messagebox.showwarning("Not allowed", "Only the learner can cancel a pending session.")
+        MOCK_DB["users"][uid]["credits"] += s["hours"]
+        s["status"] = "cancelled"
+        messagebox.showinfo("Cancelled", f"{s['hours']} credit(s) refunded.")
+        goto("sessions", page_sessions)
     bar = Frame(body, bg=BG)
     bar.pack(anchor="w")
     Button(bar, text="Confirm", command=lambda: act(do_confirm)).pack(side="left", padx=(0, 6))
     Button(bar, text="Mark completed", bg="sky blue", command=lambda: act(do_complete)).pack(side="left", padx=(0, 6))
     Button(bar, text="Report issue", fg="#A8382E", command=lambda: act(do_dispute)).pack(side="left", padx=(0, 6))
     Button(bar, text="Review", command=lambda: act(do_review)).pack(side="left")
+    Button(bar, text="Cancel", command=lambda: act(do_cancel)).pack(side="left", padx=(6, 0))
 # WALLET 
 def page_wallet():
     title_lbl.config(text="Wallet")
