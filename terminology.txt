@@ -1,0 +1,489 @@
+# =====================================================================
+# IMPORT SECTION: BRINGING IN TOOLS & MODULES
+# =====================================================================
+
+# FastAPI is the core framework used to build our backend API web server.
+# HTTPException lets us send error responses (like 404 Not Found) back to the user.
+# Depends is used for Dependency Injection (automatically opening/closing DB sessions).
+from fastapi import FastAPI, HTTPException, Depends
+
+# BaseModel from Pydantic validates incoming data from the frontend (ensuring types match).
+from pydantic import BaseModel
+
+# Typing tools: List defines arrays/lists, Optional allows fields to be blank/None.
+from typing import List, Optional
+
+# DateTime helps handle and record timestamps for actions like bookings.
+from datetime import datetime
+
+# SQLAlchemy Session type definition used for database operations.
+from sqlalchemy.orm import Session
+
+# CONNECTIVITY & DATABASE MODELS:
+# - SessionLocal & get_db: Connects Python to our MySQL database using the .env credentials.
+# - UserModel, SkillModel, BookingModel, TransactionModel: Python classes representing our MySQL tables.
+from connectivity import SessionLocal, get_db, UserModel, SkillModel, BookingModel, TransactionModel
+
+
+# =====================================================================
+# APP INITIALIZATION
+# =====================================================================
+
+# This creates our FastAPI application instance with custom title and metadata.
+app = FastAPI(
+    title="SkillSwap API",
+    description="Peer-to-Peer Student Time Bank",
+    version="1.0"
+)
+
+
+# =====================================================================
+# PYDANTIC SCHEMAS (DATA VALIDATION)
+# =====================================================================
+
+class UserCreate(BaseModel):
+    """Validates data sent when a new user registers through the Tkinter UI."""
+    name: str
+    email: str
+    department: str
+    availability: List[str] = []
+
+
+class SkillCreate(BaseModel):
+    """Validates data when a user adds a skill they want to offer or request."""
+    skill_name: str
+    skill_type: str
+
+
+class BookingCreate(BaseModel):
+    """Validates data when a student books a session with a tutor."""
+    student_id: int
+    tutor_id: int
+    skill_id: int
+    date: str
+    start_time: str
+    duration: int
+
+
+class RatingCreate(BaseModel):
+    """Validates rating and review data submitted after a session completes."""
+    rating: float
+    review: Optional[str] = None
+
+
+class DisputeCreate(BaseModel):
+    """Validates dispute reasons if a session encounters issues."""
+    reason: str
+
+
+# =====================================================================
+# ROOT ENDPOINT
+# =====================================================================
+
+@app.get("/")
+def home():
+    """Simple health-check endpoint to verify if the FastAPI server is running."""
+    return {
+        "message": "SkillSwap API is running",
+        "status": "success"
+    }
+
+
+# =====================================================================
+# USER ENDPOINTS (DATABASE PERSISTENT)
+# =====================================================================
+
+@app.post("/users")
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    """
+    Registers a new user. 
+    - db: Session = Depends(get_db) automatically injects a live MySQL database session.
+    - Checks if the email already exists to prevent duplicates.
+    - Saves the record permanently to the MySQL 'users' table using SQLAlchemy.
+    """
+    # Check for existing email in MySQL database
+    existing_user = db.query(UserModel).filter(UserModel.email == user.email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
+
+    # Convert Python list of availability strings into a comma-separated format for database storage
+    avail_str = ",".join(user.availability) if isinstance(user.availability, list) else user.availability
+
+    # Instantiate the SQLAlchemy model (maps to the MySQL users table)
+    new_user = UserModel(
+        name=user.name,
+        email=user.email,
+        department=user.department,
+        availability=avail_str,
+        credits=5,      # Starting demo credits for new students
+        rating=0.0
+    )
+
+    # Add the user to the session, commit the transaction to MySQL, and refresh to fetch the generated ID
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return {
+        "message": "User registered successfully",
+        "user": {
+            "id": new_user.id,
+            "name": new_user.name,
+            "email": new_user.email,
+            "department": new_user.department,
+            "availability": new_user.availability.split(",") if new_user.availability else [],
+            "credits": new_user.credits,
+            "rating": new_user.rating
+        }
+    }
+
+
+@app.get("/users/{user_id}")
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    """Queries the MySQL database to fetch profile details for a specific user ID."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "department": user.department,
+        "availability": user.availability.split(",") if user.availability else [],
+        "credits": user.credits,
+        "rating": user.rating
+    }
+
+
+# =====================================================================
+# SKILL MANAGEMENT ENDPOINTS
+# =====================================================================
+
+@app.post("/users/{user_id}/skills")
+def add_skill(user_id: int, skill: SkillCreate, db: Session = Depends(get_db)):
+    """Allows a user to link a new 'offered' or 'requested' skill to their profile in MySQL."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="User not found"
+        )
+
+    if skill.skill_type not in ["offered", "requested"]:
+        raise HTTPException(
+            status_code=400,
+            detail="skill_type must be 'offered' or 'requested'"
+        )
+
+    new_skill = SkillModel(
+        user_id=user_id,
+        skill_name=skill.skill_name,
+        skill_type=skill.skill_type
+    )
+
+    db.add(new_skill)
+    db.commit()
+    db.refresh(new_skill)
+
+    return {
+        "message": "Skill added successfully",
+        "skill": {
+            "id": new_skill.id,
+            "user_id": new_skill.user_id,
+            "skill_name": new_skill.skill_name,
+            "skill_type": new_skill.skill_type
+        }
+    }
+
+
+@app.get("/users/{user_id}/skills")
+def get_user_skills(user_id: int, db: Session = Depends(get_db)):
+    """Fetches all skills registered under a specific user ID from MySQL."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    skills = db.query(SkillModel).filter(SkillModel.user_id == user_id).all()
+    return skills
+
+
+@app.get("/skills")
+def get_all_skills(db: Session = Depends(get_db)):
+    """Fetches every listed skill across all users from the database."""
+    return db.query(SkillModel).all()
+
+
+# =====================================================================
+# PEER MATCHING ENDPOINT
+# =====================================================================
+
+@app.get("/matches")
+def find_matches(
+    skill_name: str,
+    availability: Optional[str] = None,
+    min_rating: float = 0,
+    db: Session = Depends(get_db)
+):
+    """Filters database records to find available tutors matching a requested skill and criteria."""
+    offered_skills = db.query(SkillModel).filter(
+        SkillModel.skill_type == "offered",
+        SkillModel.skill_name.ilike(skill_name)
+    ).all()
+
+    matches = []
+    for skill in offered_skills:
+        tutor = db.query(UserModel).filter(UserModel.id == skill.user_id).first()
+        if not tutor:
+            continue
+
+        if tutor.rating < min_rating:
+            continue
+
+        tutor_avail = tutor.availability.split(",") if tutor.availability else []
+        if availability and availability not in tutor_avail:
+            continue
+
+        matches.append({
+            "user_id": tutor.id,
+            "name": tutor.name,
+            "department": tutor.department,
+            "skill": skill.skill_name,
+            "rating": tutor.rating,
+            "availability": tutor_avail
+        })
+
+    # Sort matching results to show highest-rated tutors first
+    matches.sort(key=lambda x: x["rating"], reverse=True)
+
+    return {
+        "count": len(matches),
+        "matches": matches
+    }
+
+
+# =====================================================================
+# CREDITS & TRANSACTION HISTORY ENDPOINTS
+# =====================================================================
+
+@app.get("/users/{user_id}/credits")
+def get_credits(user_id: int, db: Session = Depends(get_db)):
+    """Queries the user's current time-credit balance from MySQL."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {
+        "user_id": user_id,
+        "credits": user.credits
+    }
+
+
+@app.get("/users/{user_id}/transactions")
+def get_transactions(user_id: int, db: Session = Depends(get_db)):
+    """Fetches the log of credit escrow locks and releases for a user."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return db.query(TransactionModel).filter(TransactionModel.user_id == user_id).all()
+
+
+# =====================================================================
+# BOOKING & ESCROW ENDPOINTS
+# =====================================================================
+
+@app.post("/bookings")
+def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
+    """
+    Handles session bookings:
+    - Verifies student balance.
+    - Locks credits in escrow (subtracts from student balance).
+    - Creates a pending booking and logs the transaction in MySQL.
+    """
+    student = db.query(UserModel).filter(UserModel.id == booking.student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    tutor = db.query(UserModel).filter(UserModel.id == booking.tutor_id).first()
+    if not tutor:
+        raise HTTPException(status_code=404, detail="Tutor not found")
+
+    if booking.student_id == booking.tutor_id:
+        raise HTTPException(status_code=400, detail="Student and tutor cannot be the same")
+
+    if booking.duration not in [1, 2]:
+        raise HTTPException(status_code=400, detail="Duration must be 1 or 2 hours")
+
+    if student.credits < booking.duration:
+        raise HTTPException(status_code=400, detail="Insufficient Time Credits")
+
+    skill = db.query(SkillModel).filter(
+        SkillModel.id == booking.skill_id,
+        SkillModel.user_id == booking.tutor_id,
+        SkillModel.skill_type == "offered"
+    ).first()
+
+    if not skill:
+        raise HTTPException(status_code=400, detail="Tutor does not offer this skill")
+
+    # Escrow lock: deduct credits temporarily from the student
+    student.credits -= booking.duration
+
+    # Create the pending booking record
+    new_booking = BookingModel(
+        student_id=booking.student_id,
+        tutor_id=booking.tutor_id,
+        skill_id=booking.skill_id,
+        date=booking.date,
+        start_time=booking.start_time,
+        duration=booking.duration,
+        credits=booking.duration,
+        status="pending"
+    )
+    db.add(new_booking)
+    db.commit()
+    db.refresh(new_booking)
+
+    # Log the escrow transaction
+    transaction = TransactionModel(
+        user_id=booking.student_id,
+        type="escrow_lock",
+        amount=booking.duration,
+        booking_id=new_booking.id
+    )
+    db.add(transaction)
+    db.commit()
+
+    return {
+        "message": "Booking created successfully",
+        "escrow": f"{booking.duration} credit(s) locked",
+        "booking": new_booking
+    }
+
+
+@app.get("/users/{user_id}/bookings")
+def get_user_bookings(user_id: int, db: Session = Depends(get_db)):
+    """Fetches all bookings where the user is participating as a student or tutor."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return db.query(BookingModel).filter(
+        (BookingModel.student_id == user_id) | (BookingModel.tutor_id == user_id)
+    ).all()
+
+
+# =====================================================================
+# SESSION CONFIRMATION & COMPLETION ENDPOINTS
+# =====================================================================
+
+@app.post("/bookings/{booking_id}/confirm")
+def confirm_booking(booking_id: int, db: Session = Depends(get_db)):
+    """Updates a pending booking status to 'confirmed'."""
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking.status != "pending":
+        raise HTTPException(status_code=400, detail="Booking cannot be confirmed")
+
+    booking.status = "confirmed"
+    db.commit()
+    db.refresh(booking)
+
+    return {
+        "message": "Booking confirmed",
+        "booking": booking
+    }
+
+
+@app.post("/bookings/{booking_id}/complete")
+def complete_session(booking_id: int, db: Session = Depends(get_db)):
+    """
+    Completes a confirmed session:
+    - Releases escrow credits and transfers them directly to the tutor's balance.
+    - Marks booking status as 'completed'.
+    """
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking.status != "confirmed":
+        raise HTTPException(status_code=400, detail="Booking must be confirmed first")
+
+    tutor = db.query(UserModel).filter(UserModel.id == booking.tutor_id).first()
+    tutor.credits += booking.credits
+    booking.status = "completed"
+
+    transaction = TransactionModel(
+        user_id=tutor.id,
+        type="escrow_release",
+        amount=booking.credits,
+        booking_id=booking_id
+    )
+
+    db.add(transaction)
+    db.commit()
+
+    return {
+        "message": "Session completed successfully",
+        "credits_transferred": booking.credits,
+        "booking": booking
+    }
+
+
+# =====================================================================
+# RATINGS & ANALYTICS ENDPOINTS
+# =====================================================================
+
+@app.post("/bookings/{booking_id}/rating")
+def rate_tutor(booking_id: int, rating: RatingCreate, db: Session = Depends(get_db)):
+    """Allows students to submit a rating for a tutor after session completion."""
+    if rating.rating < 1 or rating.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    if booking.status != "completed":
+        raise HTTPException(status_code=400, detail="Session must be completed first")
+
+    tutor = db.query(UserModel).filter(UserModel.id == booking.tutor_id).first()
+    tutor.rating = round(float(rating.rating), 2)
+
+    db.commit()
+
+    return {
+        "message": "Rating submitted successfully",
+        "new_tutor_rating": tutor.rating
+    }
+
+
+@app.get("/users/{user_id}/analytics")
+def get_analytics(user_id: int, db: Session = Depends(get_db)):
+    """Calculates cumulative learning hours taught vs. received for analytics dashboards."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    completed_bookings = db.query(BookingModel).filter(
+        BookingModel.status == "completed"
+    ).all()
+
+    hours_taught = sum(b.duration for b in completed_bookings if b.tutor_id == user_id)
+    hours_received = sum(b.duration for b in completed_bookings if b.student_id == user_id)
+
+    return {
+        "user_id": user_id,
+        "hours_taught": hours_taught,
+        "hours_received": hours_received,
+        "net_learning_balance": hours_received - hours_taught
+    }
