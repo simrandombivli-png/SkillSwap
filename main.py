@@ -1,29 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+from sqlalchemy.orm import Session
 from connectivity import SessionLocal, get_db, UserModel, SkillModel, BookingModel, TransactionModel
+
 app = FastAPI(
     title="SkillSwap API",
     description="Peer-to-Peer Student Time Bank",
     version="1.0"
 )
-
-
-# ============================================================
-# TEMPORARY DATABASE
-# ============================================================
-
-users = {}
-skills = []
-bookings = []
-transactions = []
-ratings = []
-disputes = []
-
-next_user_id = 1
-next_skill_id = 1
-next_booking_id = 1
 
 
 # ============================================================
@@ -77,53 +63,63 @@ def home():
 # ============================================================
 
 @app.post("/users")
-def create_user(user: UserCreate):
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    # Check duplicate email in MySQL database
+    existing_user = db.query(UserModel).filter(UserModel.email == user.email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Email already registered"
+        )
 
-    global next_user_id
+    # Convert availability list to comma-separated string for DB storage
+    avail_str = ",".join(user.availability) if isinstance(user.availability, list) else user.availability
 
-    # Check duplicate email
-    for existing_user in users.values():
+    new_user = UserModel(
+        name=user.name,
+        email=user.email,
+        department=user.department,
+        availability=avail_str,
+        credits=5,
+        rating=0.0
+    )
 
-        if existing_user["email"] == user.email:
-            raise HTTPException(
-                status_code=400,
-                detail="Email already registered"
-            )
-
-    new_user = {
-        "id": next_user_id,
-        "name": user.name,
-        "email": user.email,
-        "department": user.department,
-        "availability": user.availability,
-
-        # Starting credits for demonstration
-        "credits": 5,
-
-        "rating": 0,
-        "rating_count": 0
-    }
-
-    users[next_user_id] = new_user
-
-    next_user_id += 1
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
 
     return {
         "message": "User registered successfully",
-        "user": new_user
+        "user": {
+            "id": new_user.id,
+            "name": new_user.name,
+            "email": new_user.email,
+            "department": new_user.department,
+            "availability": new_user.availability.split(",") if new_user.availability else [],
+            "credits": new_user.credits,
+            "rating": new_user.rating
+        }
     }
 
 
 @app.get("/users/{user_id}")
-def get_user(user_id: int):
-
-    if user_id not in users:
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
 
-    return users[user_id]
+    return {
+        "id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "department": user.department,
+        "availability": user.availability.split(",") if user.availability else [],
+        "credits": user.credits,
+        "rating": user.rating
+    }
 
 
 # ============================================================
@@ -131,14 +127,9 @@ def get_user(user_id: int):
 # ============================================================
 
 @app.post("/users/{user_id}/skills")
-def add_skill(
-    user_id: int,
-    skill: SkillCreate
-):
-
-    global next_skill_id
-
-    if user_id not in users:
+def add_skill(user_id: int, skill: SkillCreate, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -150,42 +141,43 @@ def add_skill(
             detail="skill_type must be 'offered' or 'requested'"
         )
 
-    new_skill = {
-        "id": next_skill_id,
-        "user_id": user_id,
-        "skill_name": skill.skill_name,
-        "skill_type": skill.skill_type
-    }
+    new_skill = SkillModel(
+        user_id=user_id,
+        skill_name=skill.skill_name,
+        skill_type=skill.skill_type
+    )
 
-    skills.append(new_skill)
-
-    next_skill_id += 1
+    db.add(new_skill)
+    db.commit()
+    db.refresh(new_skill)
 
     return {
         "message": "Skill added successfully",
-        "skill": new_skill
+        "skill": {
+            "id": new_skill.id,
+            "user_id": new_skill.user_id,
+            "skill_name": new_skill.skill_name,
+            "skill_type": new_skill.skill_type
+        }
     }
 
 
 @app.get("/users/{user_id}/skills")
-def get_user_skills(user_id: int):
-
-    if user_id not in users:
+def get_user_skills(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
 
-    return [
-        skill
-        for skill in skills
-        if skill["user_id"] == user_id
-    ]
+    skills = db.query(SkillModel).filter(SkillModel.user_id == user_id).all()
+    return skills
 
 
 @app.get("/skills")
-def get_all_skills():
-    return skills
+def get_all_skills(db: Session = Depends(get_db)):
+    return db.query(SkillModel).all()
 
 
 # ============================================================
@@ -196,47 +188,37 @@ def get_all_skills():
 def find_matches(
     skill_name: str,
     availability: Optional[str] = None,
-    min_rating: float = 0
+    min_rating: float = 0,
+    db: Session = Depends(get_db)
 ):
+    offered_skills = db.query(SkillModel).filter(
+        SkillModel.skill_type == "offered",
+        SkillModel.skill_name.ilike(skill_name)
+    ).all()
 
     matches = []
-
-    for skill in skills:
-
-        # Only look at skills people offer
-        if skill["skill_type"] != "offered":
+    for skill in offered_skills:
+        tutor = db.query(UserModel).filter(UserModel.id == skill.user_id).first()
+        if not tutor:
             continue
 
-        # Check skill name
-        if skill["skill_name"].lower() != skill_name.lower():
+        if tutor.rating < min_rating:
             continue
 
-        tutor = users[skill["user_id"]]
-
-        # Check rating
-        if tutor["rating"] < min_rating:
+        tutor_avail = tutor.availability.split(",") if tutor.availability else []
+        if availability and availability not in tutor_avail:
             continue
-
-        # Check availability
-        if availability:
-
-            if availability not in tutor["availability"]:
-                continue
 
         matches.append({
-            "user_id": tutor["id"],
-            "name": tutor["name"],
-            "department": tutor["department"],
-            "skill": skill["skill_name"],
-            "rating": tutor["rating"],
-            "availability": tutor["availability"]
+            "user_id": tutor.id,
+            "name": tutor.name,
+            "department": tutor.department,
+            "skill": skill.skill_name,
+            "rating": tutor.rating,
+            "availability": tutor_avail
         })
 
-    # Highest-rated tutors first
-    matches.sort(
-        key=lambda x: x["rating"],
-        reverse=True
-    )
+    matches.sort(key=lambda x: x["rating"], reverse=True)
 
     return {
         "count": len(matches),
@@ -249,9 +231,9 @@ def find_matches(
 # ============================================================
 
 @app.get("/users/{user_id}/credits")
-def get_credits(user_id: int):
-
-    if user_id not in users:
+def get_credits(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found"
@@ -259,24 +241,20 @@ def get_credits(user_id: int):
 
     return {
         "user_id": user_id,
-        "credits": users[user_id]["credits"]
+        "credits": user.credits
     }
 
 
 @app.get("/users/{user_id}/transactions")
-def get_transactions(user_id: int):
-
-    if user_id not in users:
+def get_transactions(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
         raise HTTPException(
             status_code=404,
             detail="User not found"
         )
 
-    return [
-        transaction
-        for transaction in transactions
-        if transaction["user_id"] == user_id
-    ]
+    return db.query(TransactionModel).filter(TransactionModel.user_id == user_id).all()
 
 
 # ============================================================
@@ -284,137 +262,61 @@ def get_transactions(user_id: int):
 # ============================================================
 
 @app.post("/bookings")
-def create_booking(booking: BookingCreate):
+def create_booking(booking: BookingCreate, db: Session = Depends(get_db)):
+    student = db.query(UserModel).filter(UserModel.id == booking.student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
 
-    global next_booking_id
+    tutor = db.query(UserModel).filter(UserModel.id == booking.tutor_id).first()
+    if not tutor:
+        raise HTTPException(status_code=404, detail="Tutor not found")
 
-    # Check student
-    if booking.student_id not in users:
-        raise HTTPException(
-            status_code=404,
-            detail="Student not found"
-        )
-
-    # Check tutor
-    if booking.tutor_id not in users:
-        raise HTTPException(
-            status_code=404,
-            detail="Tutor not found"
-        )
-
-    # Student and tutor cannot be same
     if booking.student_id == booking.tutor_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Student and tutor cannot be the same"
-        )
+        raise HTTPException(status_code=400, detail="Student and tutor cannot be the same")
 
-    # Only 1 or 2 hour sessions
     if booking.duration not in [1, 2]:
-        raise HTTPException(
-            status_code=400,
-            detail="Duration must be 1 or 2 hours"
-        )
+        raise HTTPException(status_code=400, detail="Duration must be 1 or 2 hours")
 
-    student = users[booking.student_id]
+    if student.credits < booking.duration:
+        raise HTTPException(status_code=400, detail="Insufficient Time Credits")
 
-    # ========================================================
-    # CREDIT CHECK
-    # ========================================================
+    # Check tutor's skill
+    skill = db.query(SkillModel).filter(
+        SkillModel.id == booking.skill_id,
+        SkillModel.user_id == booking.tutor_id,
+        SkillModel.skill_type == "offered"
+    ).first()
 
-    if student["credits"] < booking.duration:
-        raise HTTPException(
-            status_code=400,
-            detail="Insufficient Time Credits"
-        )
+    if not skill:
+        raise HTTPException(status_code=400, detail="Tutor does not offer this skill")
 
-    # ========================================================
-    # CHECK TUTOR'S SKILL
-    # ========================================================
+    # Lock escrow credits
+    student.credits -= booking.duration
 
-    valid_skill = any(
-        skill["id"] == booking.skill_id
-        and skill["user_id"] == booking.tutor_id
-        and skill["skill_type"] == "offered"
-        for skill in skills
+    # Create Booking
+    new_booking = BookingModel(
+        student_id=booking.student_id,
+        tutor_id=booking.tutor_id,
+        skill_id=booking.skill_id,
+        date=booking.date,
+        start_time=booking.start_time,
+        duration=booking.duration,
+        credits=booking.duration,
+        status="pending"
     )
+    db.add(new_booking)
+    db.commit()
+    db.refresh(new_booking)
 
-    if not valid_skill:
-        raise HTTPException(
-            status_code=400,
-            detail="Tutor does not offer this skill"
-        )
-
-    # ========================================================
-    # SCHEDULE CONFLICT CHECK
-    # ========================================================
-
-    for existing_booking in bookings:
-
-        if existing_booking["status"] not in [
-            "pending",
-            "confirmed"
-        ]:
-            continue
-
-        if existing_booking["date"] != booking.date:
-            continue
-
-        if existing_booking["start_time"] != booking.start_time:
-            continue
-
-        # Check student conflict
-        if existing_booking["student_id"] == booking.student_id:
-
-            raise HTTPException(
-                status_code=400,
-                detail="Student already has a booking at this time"
-            )
-
-        # Check tutor conflict
-        if existing_booking["tutor_id"] == booking.tutor_id:
-
-            raise HTTPException(
-                status_code=400,
-                detail="Tutor already has a booking at this time"
-            )
-
-    # ========================================================
-    # ESCROW
-    # ========================================================
-
-    # Remove credits from student's available balance
-    student["credits"] -= booking.duration
-
-    # Record escrow transaction
-    transactions.append({
-        "user_id": booking.student_id,
-        "type": "escrow_lock",
-        "amount": booking.duration,
-        "booking_id": next_booking_id,
-        "timestamp": datetime.now().isoformat()
-    })
-
-    # ========================================================
-    # CREATE BOOKING
-    # ========================================================
-
-    new_booking = {
-        "id": next_booking_id,
-        "student_id": booking.student_id,
-        "tutor_id": booking.tutor_id,
-        "skill_id": booking.skill_id,
-        "date": booking.date,
-        "start_time": booking.start_time,
-        "duration": booking.duration,
-        "credits": booking.duration,
-        "status": "pending",
-        "created_at": datetime.now().isoformat()
-    }
-
-    bookings.append(new_booking)
-
-    next_booking_id += 1
+    # Log Transaction
+    transaction = TransactionModel(
+        user_id=booking.student_id,
+        type="escrow_lock",
+        amount=booking.duration,
+        booking_id=new_booking.id
+    )
+    db.add(transaction)
+    db.commit()
 
     return {
         "message": "Booking created successfully",
@@ -428,34 +330,22 @@ def create_booking(booking: BookingCreate):
 # ============================================================
 
 @app.get("/bookings/{booking_id}")
-def get_booking(booking_id: int):
-
-    for booking in bookings:
-
-        if booking["id"] == booking_id:
-            return booking
-
-    raise HTTPException(
-        status_code=404,
-        detail="Booking not found"
-    )
+def get_booking(booking_id: int, db: Session = Depends(get_db)):
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    return booking
 
 
 @app.get("/users/{user_id}/bookings")
-def get_user_bookings(user_id: int):
+def get_user_bookings(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    if user_id not in users:
-        raise HTTPException(
-            status_code=404,
-            detail="User not found"
-        )
-
-    return [
-        booking
-        for booking in bookings
-        if booking["student_id"] == user_id
-        or booking["tutor_id"] == user_id
-    ]
+    return db.query(BookingModel).filter(
+        (BookingModel.student_id == user_id) | (BookingModel.tutor_id == user_id)
+    ).all()
 
 
 # ============================================================
@@ -463,29 +353,22 @@ def get_user_bookings(user_id: int):
 # ============================================================
 
 @app.post("/bookings/{booking_id}/confirm")
-def confirm_booking(booking_id: int):
+def confirm_booking(booking_id: int, db: Session = Depends(get_db)):
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
 
-    for booking in bookings:
+    if booking.status != "pending":
+        raise HTTPException(status_code=400, detail="Booking cannot be confirmed")
 
-        if booking["id"] == booking_id:
+    booking.status = "confirmed"
+    db.commit()
+    db.refresh(booking)
 
-            if booking["status"] != "pending":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Booking cannot be confirmed"
-                )
-
-            booking["status"] = "confirmed"
-
-            return {
-                "message": "Booking confirmed",
-                "booking": booking
-            }
-
-    raise HTTPException(
-        status_code=404,
-        detail="Booking not found"
-    )
+    return {
+        "message": "Booking confirmed",
+        "booking": booking
+    }
 
 
 # ============================================================
@@ -493,87 +376,33 @@ def confirm_booking(booking_id: int):
 # ============================================================
 
 @app.post("/bookings/{booking_id}/complete")
-def complete_session(booking_id: int):
+def complete_session(booking_id: int, db: Session = Depends(get_db)):
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
 
-    for booking in bookings:
+    if booking.status != "confirmed":
+        raise HTTPException(status_code=400, detail="Booking must be confirmed first")
 
-        if booking["id"] == booking_id:
+    tutor = db.query(UserModel).filter(UserModel.id == booking.tutor_id).first()
+    tutor.credits += booking.credits
+    booking.status = "completed"
 
-            if booking["status"] != "confirmed":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Booking must be confirmed first"
-                )
-
-            tutor = users[booking["tutor_id"]]
-
-            # Release escrow
-            tutor["credits"] += booking["credits"]
-
-            booking["status"] = "completed"
-
-            # Record transaction
-            transactions.append({
-                "user_id": tutor["id"],
-                "type": "escrow_release",
-                "amount": booking["credits"],
-                "booking_id": booking_id,
-                "timestamp": datetime.now().isoformat()
-            })
-
-            return {
-                "message": "Session completed successfully",
-                "credits_transferred": booking["credits"],
-                "booking": booking
-            }
-
-    raise HTTPException(
-        status_code=404,
-        detail="Booking not found"
+    transaction = TransactionModel(
+        user_id=tutor.id,
+        type="escrow_release",
+        amount=booking.credits,
+        booking_id=booking_id
     )
 
+    db.add(transaction)
+    db.commit()
 
-# ============================================================
-# DISPUTE API
-# ============================================================
-
-@app.post("/bookings/{booking_id}/dispute")
-def create_dispute(
-    booking_id: int,
-    dispute: DisputeCreate
-):
-
-    for booking in bookings:
-
-        if booking["id"] == booking_id:
-
-            if booking["status"] == "completed":
-
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot dispute a completed session"
-                )
-
-            new_dispute = {
-                "booking_id": booking_id,
-                "reason": dispute.reason,
-                "status": "open",
-                "created_at": datetime.now().isoformat()
-            }
-
-            disputes.append(new_dispute)
-
-            booking["status"] = "disputed"
-
-            return {
-                "message": "Dispute submitted successfully",
-                "dispute": new_dispute
-            }
-
-    raise HTTPException(
-        status_code=404,
-        detail="Booking not found"
-    )
+    return {
+        "message": "Session completed successfully",
+        "credits_transferred": booking.credits,
+        "booking": booking
+    }
 
 
 # ============================================================
@@ -581,64 +410,26 @@ def create_dispute(
 # ============================================================
 
 @app.post("/bookings/{booking_id}/rating")
-def rate_tutor(
-    booking_id: int,
-    rating: RatingCreate
-):
-
+def rate_tutor(booking_id: int, rating: RatingCreate, db: Session = Depends(get_db)):
     if rating.rating < 1 or rating.rating > 5:
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
 
-        raise HTTPException(
-            status_code=400,
-            detail="Rating must be between 1 and 5"
-        )
+    booking = db.query(BookingModel).filter(BookingModel.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
 
-    for booking in bookings:
+    if booking.status != "completed":
+        raise HTTPException(status_code=400, detail="Session must be completed first")
 
-        if booking["id"] == booking_id:
+    tutor = db.query(UserModel).filter(UserModel.id == booking.tutor_id).first()
+    tutor.rating = round(float(rating.rating), 2)
 
-            if booking["status"] != "completed":
+    db.commit()
 
-                raise HTTPException(
-                    status_code=400,
-                    detail="Session must be completed first"
-                )
-
-            tutor = users[booking["tutor_id"]]
-
-            old_rating = tutor["rating"]
-            old_count = tutor["rating_count"]
-
-            new_count = old_count + 1
-
-            new_rating = (
-                (old_rating * old_count)
-                + rating.rating
-            ) / new_count
-
-            tutor["rating"] = round(
-                new_rating,
-                2
-            )
-
-            tutor["rating_count"] = new_count
-
-            ratings.append({
-                "booking_id": booking_id,
-                "tutor_id": tutor["id"],
-                "rating": rating.rating,
-                "review": rating.review
-            })
-
-            return {
-                "message": "Rating submitted successfully",
-                "new_tutor_rating": tutor["rating"]
-            }
-
-    raise HTTPException(
-        status_code=404,
-        detail="Booking not found"
-    )
+    return {
+        "message": "Rating submitted successfully",
+        "new_tutor_rating": tutor.rating
+    }
 
 
 # ============================================================
@@ -646,37 +437,21 @@ def rate_tutor(
 # ============================================================
 
 @app.get("/users/{user_id}/analytics")
-def get_analytics(user_id: int):
+def get_analytics(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    if user_id not in users:
+    completed_bookings = db.query(BookingModel).filter(
+        BookingModel.status == "completed"
+    ).all()
 
-        raise HTTPException(
-            status_code=404,
-            detail="User not found"
-        )
-
-    hours_taught = 0
-    hours_received = 0
-
-    for booking in bookings:
-
-        if booking["status"] != "completed":
-            continue
-
-        if booking["tutor_id"] == user_id:
-            hours_taught += booking["duration"]
-
-        if booking["student_id"] == user_id:
-            hours_received += booking["duration"]
+    hours_taught = sum(b.duration for b in completed_bookings if b.tutor_id == user_id)
+    hours_received = sum(b.duration for b in completed_bookings if b.student_id == user_id)
 
     return {
         "user_id": user_id,
         "hours_taught": hours_taught,
         "hours_received": hours_received,
-        "net_learning_balance":
-            hours_received - hours_taught
+        "net_learning_balance": hours_received - hours_taught
     }
-
-
-
-    #python -m uvicorn main:app --reload
