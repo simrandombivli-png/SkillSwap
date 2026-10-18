@@ -1,7 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from tkinter import *
 from tkinter import ttk, messagebox
-import requests  # used by Register, same as your firstpg.py
+import requests  # used by Register
+
+# Backend address
+API_URL = "http://127.0.0.1:8000"
+
 #THEME 
 BG, PANEL, ACCENT, ACCENT2 = "#F4F8FB", "#FFFFFF", "#2E6F95", "#F0A868"
 TEXT, MUTED = "#1B2B34", "#7A8B96"
@@ -47,6 +51,11 @@ style.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected"
 def clear():
     for widget in top.winfo_children():
         widget.destroy()
+def overlaps(date, tm, hours, b):
+    """True if a new booking (date, tm, hours) overlaps existing booking b."""
+    new_start = datetime.strptime(f"{date} {tm}", "%Y-%m-%d %H:%M")
+    old_start = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
+    return new_start < old_start + timedelta(hours=b["hours"]) and old_start < new_start + timedelta(hours=hours)
 def credits_locked(uid):
     return sum(b["hours"] for b in MOCK_DB["bookings"]
                if b["learner"] == uid and b["status"] in ("pending", "confirmed", "disputed"))
@@ -103,16 +112,24 @@ def show_register():
         if name and email and department and password:
             payload = {"name": name, "email": email, "department": department, "availability": ["Mon-Evening"]}
             try:
-                response = requests.post("http://127.0.0.1:8000/users", json=payload, timeout=5)
+                response = requests.post(f"{API_URL}/users", json=payload, timeout=5)
                 if response.status_code == 200:
                    u = response.json()["user"]
                    MOCK_DB["users"][1000 + u["id"]] = {"name": u["name"], "email": u["email"], "credits": u["credits"], "rating": 0.0, "rating_count": 0}
                    messagebox.showinfo("Success", "Registered successfully in MySQL database!")
                    show_login()
                 else:
-                    messagebox.showerror("Error", response.json().get("detail", "Registration failed"))
+                    try:
+                        detail = response.json().get("detail", "Registration failed")
+                    except ValueError:
+                        detail = f"Registration failed (server returned {response.status_code})"
+                    messagebox.showerror("Error", detail)
             except requests.exceptions.ConnectionError:
-                messagebox.showerror("Connection Error", "Is your FastAPI server running in the terminal?")
+                messagebox.showerror("Connection Error", f"Cannot reach the server at {API_URL}. Is it running?")
+            except requests.exceptions.Timeout:
+                messagebox.showerror("Timeout", "The server took too long to respond. Try again.")
+            except (requests.exceptions.RequestException, ValueError, KeyError):
+                messagebox.showerror("Error", "Unexpected response from the server.")
         else:
             messagebox.showerror("Warning", "Fill all fields!")
 
@@ -252,8 +269,8 @@ def page_browse():
             for b in MOCK_DB["bookings"]:
                 if b["status"] not in ("pending", "confirmed"):
                     continue
-                if b["date"] == date and b["time"] == tm and (b["learner"] == uid or b["teacher"] == tid):
-                    return messagebox.showerror("Conflict", "You or the tutor already have a booking at that time.")
+                if {uid, tid} & {b["learner"], b["teacher"]} and overlaps(date, tm, h, b):
+                    return messagebox.showerror("Conflict", "You or the tutor already have a booking that overlaps this time.")
             MOCK_DB["users"][uid]["credits"] -= h        # NEW: lock credits in escrow
             MOCK_DB["bookings"].append({"id": MOCK_DB["next_id"], "learner": uid, "teacher": tid, "skill": sid,
                                         "date": date, "time": tm, "hours": h, "status": "pending"})
