@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import (
-    Column, ForeignKey, Integer, Numeric, String, Table, TypeDecorator,
+    Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Table, Time, TypeDecorator,
     create_engine, inspect, join,
 )
 from sqlalchemy.engine import URL
@@ -63,7 +63,7 @@ class UserModel(Base):
     id = Column("STUDENT_ID", Integer, primary_key=True, autoincrement=True)
     name = Column("NAME", String(100), nullable=False)
     email = Column("EMAIL", String(100), unique=True, nullable=False)
-    # main.py does not send a password yet; placeholder keeps the NOT NULL column happy.
+    # The API stores a password hash here, never the plain-text password.
     password = Column("PASSWORD", String(255), nullable=False, default="")
     department = Column("DEPARTMENT", String(150), nullable=False)
     availability = Column("AVAILABILITY", String(255), default="")
@@ -84,6 +84,7 @@ _student_skill_t = Table(
     Column("STUDENT_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), primary_key=True),
     Column("SKILL_ID", Integer, ForeignKey("SKILL.SKILL_ID"), primary_key=True),
     Column("SKILL_TYPE", UpperInDB(20), primary_key=True),
+    Column("LEVEL", String(20), nullable=True),
 )
 
 
@@ -108,9 +109,9 @@ class BookingModel(Base):
     student_id = Column("LEARNER_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), nullable=False)
     tutor_id = Column("TUTOR_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), nullable=False)
     skill_id = Column("SKILL_ID", Integer, ForeignKey("SKILL.SKILL_ID"), nullable=False)
-    # main.py sends strings like "2026-10-15" / "17:00"; MySQL converts them.
-    date = Column("SESSION_DATE", String(20), nullable=False)
-    start_time = Column("START_TIME", String(20), nullable=False)
+    # Use actual SQL DATE/TIME types so Python receives date/time objects.
+    date = Column("SESSION_DATE", Date, nullable=False)
+    start_time = Column("START_TIME", Time, nullable=False)
     duration = Column("DURATION", Numeric(4, 2, asdecimal=False), nullable=False)
     status = Column("STATUS", UpperInDB(20), default="pending")
     # BOOKING has no CREDITS column: credits locked == duration, so alias it.
@@ -126,7 +127,35 @@ class TransactionModel(Base):
     user_id = Column("STUDENT_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), nullable=False)
     type = Column("TRANSACTION_TYPE", UpperInDB(30), nullable=False)
     amount = Column("AMOUNT", money(), nullable=False)
-    # TRANSACTION_DATE has a DB default (CURRENT_TIMESTAMP), so it is not mapped.
+    created = Column("TRANSACTION_DATE", DateTime)
+
+
+# Names expected by main.py for the two skill tables.
+SKILL_T = _skill_t
+STUDENT_SKILL_T = _student_skill_t
+
+
+# ---------------- REVIEW -> ReviewModel ----------------
+class ReviewModel(Base):
+    __tablename__ = "REVIEW"
+
+    id = Column("REVIEW_ID", Integer, primary_key=True, autoincrement=True)
+    booking_id = Column("BOOKING_ID", Integer, ForeignKey("BOOKING.BOOKING_ID"), nullable=False, unique=True)
+    reviewer_id = Column("REVIEWER_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), nullable=False)
+    tutor_id = Column("TUTOR_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), nullable=False)
+    rating = Column("RATING", Numeric(2, 1, asdecimal=False), nullable=False)
+    comment = Column("COMMENT", String(500), default="")
+
+
+# ---------------- DISPUTE -> DisputeModel ----------------
+class DisputeModel(Base):
+    __tablename__ = "DISPUTE"
+
+    id = Column("DISPUTE_ID", Integer, primary_key=True, autoincrement=True)
+    booking_id = Column("BOOKING_ID", Integer, ForeignKey("BOOKING.BOOKING_ID"), nullable=False)
+    user_id = Column("STUDENT_ID", Integer, ForeignKey("STUDENT.STUDENT_ID"), nullable=False)
+    reason = Column("REASON", String(500), nullable=False)
+    status = Column("STATUS", String(20), nullable=False, default="OPEN")
 
 
 # ------------- Startup check: clear error instead of a 500 later -------------
@@ -134,11 +163,13 @@ _REQUIRED = {
     "STUDENT": {"STUDENT_ID", "NAME", "EMAIL", "PASSWORD", "DEPARTMENT",
                 "AVAILABILITY", "CREDIT_BALANCE", "RATING", "RATING_COUNT"},
     "SKILL": {"SKILL_ID", "SKILL_NAME", "CATEGORY"},
-    "STUDENT_SKILL": {"STUDENT_ID", "SKILL_ID", "SKILL_TYPE"},
+    "STUDENT_SKILL": {"STUDENT_ID", "SKILL_ID", "SKILL_TYPE", "LEVEL"},
     "BOOKING": {"BOOKING_ID", "LEARNER_ID", "TUTOR_ID", "SKILL_ID",
                 "SESSION_DATE", "START_TIME", "DURATION", "STATUS"},
     "CREDIT_TRANSACTION": {"TRANSACTION_ID", "BOOKING_ID", "STUDENT_ID",
                            "TRANSACTION_TYPE", "AMOUNT"},
+    "REVIEW": {"REVIEW_ID", "BOOKING_ID", "REVIEWER_ID", "TUTOR_ID", "RATING", "COMMENT"},
+    "DISPUTE": {"DISPUTE_ID", "BOOKING_ID", "STUDENT_ID", "REASON", "STATUS"},
 }
 
 
@@ -163,3 +194,4 @@ def get_db():
         yield db
     finally:
         db.close()
+

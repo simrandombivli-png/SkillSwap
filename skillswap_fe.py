@@ -37,7 +37,7 @@ MOCK_DB = {
     "reviews": [],
     "next_id": 4,
 }
-state = {"uid": 1}
+state = {"uid": 1, "db_uid": None}
 # ROOT WINDOW
 top = Tk()
 top.title("SkillSwap")
@@ -75,63 +75,170 @@ def show_login():
     Label(form, text="Password", bg="light yellow", height=1, width=10, bd=10, font=("Segoe UI", 15)).grid(row=2, column=0, padx=10, pady=10)
     e2 = Entry(form, width=30, show="*", fg="red")
     e2.grid(row=2, column=1)
+    
     def fun():
         email = e1.get().strip().lower()
-        uid = next((i for i, u in MOCK_DB["users"].items() if u["email"].lower() == email), None)
-        if not e2.get():
-           messagebox.showerror("Warning", "Fill all Fields!")
-        elif uid is None:
-           messagebox.showerror("Login failed", "Unknown email. Try riya@college.edu or aman@college.edu")
-        else:
-          state["uid"] = uid
-          show_main()
+        password = e2.get()
+
+        if not email or not password:
+            messagebox.showerror("Warning", "Fill all fields!")
+            return
+
+        try:
+            response = requests.post(
+                f"{API_URL}/login",
+                json={"email": email, "password": password},
+                timeout=5
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                user = data.get("user", data)
+
+                db_user_id = int(user["id"])
+                uid = 1000 + db_user_id
+
+                MOCK_DB["users"][uid] = {
+                    "name": user.get("name", ""),
+                    "email": user.get("email", email),
+                    "credits": user.get("credits", 5),
+                    "rating": user.get("rating", 0.0),
+                    "rating_count": user.get("rating_count", 0)
+                }
+
+                state["uid"] = uid
+                state["db_uid"] = db_user_id
+                show_main()
+
+            else:
+                try:
+                    detail = response.json().get(
+                        "detail", "Invalid email or password"
+                    )
+                except ValueError:
+                    detail = "Invalid email or password"
+
+                messagebox.showerror("Login failed", str(detail))
+
+        except requests.exceptions.ConnectionError:
+            messagebox.showerror(
+                "Connection Error",
+                f"Cannot reach the server at {API_URL}. Is it running?"
+            )
+        except requests.exceptions.Timeout:
+            messagebox.showerror(
+                "Timeout", "The server took too long to respond."
+            )
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror("Request Error", str(exc))
+        except (ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror(
+                "Error", f"Unexpected server response: {exc}"
+            )
+
+        show_main()
     Button(form, text="Login", bg="sky blue", activebackground="yellow", command=fun).grid(row=3, column=0, columnspan=2, pady=10)
     Button(form, text="Create an account", command=show_register).grid(row=4, column=0, columnspan=2, pady=5)
 # REGISTER 
+
 def show_register():
     clear()
     top.title("SkillSwap - Register")
     top.geometry("400x420")
     form = Frame(top, bg=BG)
     form.place(relx=0.5, rely=0.5, anchor="center")
+
     Label(form, text="Create Account", bg="#2E6F95", fg="white", height=1, width=14, bd=10, font=("Segoe UI", 20, "bold")).grid(row=0, column=0, columnspan=2, padx=10, pady=10)
     Label(form, text="Name : ", bg="light yellow", height=1, width=10, bd=5, font=("Segoe UI", 11)).grid(row=1, column=0, padx=5, pady=5)
     e1 = Entry(form, width=25)
     e1.grid(row=1, column=1)
+
     Label(form, text="Email : ", bg="light yellow", height=1, width=10, bd=5, font=("Segoe UI", 11)).grid(row=2, column=0, padx=5, pady=5)
     e2 = Entry(form, width=25)
     e2.grid(row=2, column=1)
+
     Label(form, text="Department:", bg="light yellow", height=1, width=10, bd=5, font=("Segoe UI", 11)).grid(row=3, column=0, padx=5, pady=5)
     e_dept = Entry(form, width=25)
     e_dept.grid(row=3, column=1)
+
     Label(form, text="Password : ", bg="light yellow", height=1, width=10, bd=5, font=("Segoe UI", 11)).grid(row=4, column=0, padx=5, pady=5)
     e3 = Entry(form, width=25, show="*", fg="red")
     e3.grid(row=4, column=1)
+
     def fun():
-        name, email, department, password = e1.get(), e2.get(), e_dept.get(), e3.get()
-        if name and email and department and password:
-            payload = {"name": name, "email": email, "department": department, "availability": ["Mon-Evening"]}
-            try:
-                response = requests.post(f"{API_URL}/users", json=payload, timeout=5)
-                if response.status_code == 200:
-                   u = response.json()["user"]
-                   MOCK_DB["users"][1000 + u["id"]] = {"name": u["name"], "email": u["email"], "credits": u["credits"], "rating": 0.0, "rating_count": 0}
-                   messagebox.showinfo("Success", "Registered successfully in MySQL database!")
-                   show_login()
-                else:
-                    try:
-                        detail = response.json().get("detail", "Registration failed")
-                    except ValueError:
-                        detail = f"Registration failed (server returned {response.status_code})"
-                    messagebox.showerror("Error", detail)
-            except requests.exceptions.ConnectionError:
-                messagebox.showerror("Connection Error", f"Cannot reach the server at {API_URL}. Is it running?")
-            except requests.exceptions.Timeout:
-                messagebox.showerror("Timeout", "The server took too long to respond. Try again.")
-            except (requests.exceptions.RequestException, ValueError, KeyError):
-                messagebox.showerror("Error", "Unexpected response from the server.")
-        else:
+        name = e1.get().strip()
+        email = e2.get().strip().lower()
+        department = e_dept.get().strip()
+        password = e3.get()
+
+        if not name or not email or not department or not password:
             messagebox.showerror("Warning", "Fill all fields!")
+            return
+
+        payload = {
+            "name": name,
+            "email": email,
+            "department": department,
+            "password": password,
+            "availability": ["Mon-Evening"]
+        }
+
+        try:
+            response = requests.post(
+                f"{API_URL}/users",
+                json=payload,
+                timeout=5
+            )
+
+            if response.status_code in (200, 201):
+                data = response.json()
+                u = data.get("user", data)
+
+                if "id" in u:
+                    MOCK_DB["users"][1000 + int(u["id"])] = {
+                        "name": u.get("name", name),
+                        "email": u.get("email", email),
+                        "credits": u.get("credits", 5),
+                        "rating": 0.0,
+                        "rating_count": 0
+                    }
+
+                messagebox.showinfo(
+                    "Success",
+                    "Registered successfully in MySQL database!"
+                )
+                show_login()
+
+            else:
+                try:
+                    detail = response.json().get(
+                        "detail", "Registration failed"
+                    )
+                except ValueError:
+                    detail = f"Registration failed (server returned {response.status_code})"
+
+                messagebox.showerror("Error", str(detail))
+
+        except requests.exceptions.ConnectionError:
+            messagebox.showerror(
+                "Connection Error",
+                f"Cannot reach the server at {API_URL}. Is it running?"
+            )
+
+        except requests.exceptions.Timeout:
+            messagebox.showerror(
+                "Timeout",
+                "The server took too long to respond. Try again."
+            )
+
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror("Request Error", str(exc))
+
+        except (ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror("Error", f"Unexpected server response: {exc}")
+
+    Button(form, text="Register", bg="sky blue", activebackground="yellow", command=fun).grid(row=5, column=0, columnspan=2, pady=10)
+    Button(form, text="Back to login", command=show_login).grid(row=6, column=0, columnspan=2)
 
     Button(form, text="Register", bg="sky blue", activebackground="yellow", command=fun).grid(row=5, column=0, columnspan=2, pady=10)
     Button(form, text="Back to login", command=show_login).grid(row=6, column=0, columnspan=2)
@@ -215,21 +322,33 @@ def page_browse():
     def load():
         for i in list(t.get_children()):
             t.delete(i)
-        for u, sid, typ, level in MOCK_DB["user_skills"]:
-            if typ != "offered" or u == uid:
-                continue
-            sname = MOCK_DB["skills"][sid]
-            if kw.get().strip() and kw.get().strip().lower() not in sname.lower():
-                continue
-            teacher = MOCK_DB["users"][u]
-            if minr.get() != "Any" and teacher["rating"] < float(minr.get()):
-                continue
-            a = MOCK_DB["availability"].get(u, "-")
-            if avail.get() != "Any" and avail.get() != a:
-                continue
-            iid = f"{u}-{sid}"
-            rows_holder[iid] = (u, teacher["name"], sid, sname, level)
-            t.insert("", "end", iid=iid, values=(teacher["name"], sname, level, teacher["rating"], a))
+        rows_holder.clear()
+        try:
+            params = {
+                "skill_name": kw.get().strip(),
+                "exclude_user_id": state.get("db_uid"),
+                "min_rating": 0 if minr.get() == "Any" else float(minr.get()),
+            }
+            if avail.get() != "Any":
+                params["availability"] = avail.get()
+            response = requests.get(f"{API_URL}/matches", params=params, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            for match in data.get("matches", []):
+                teacher_id = int(match["user_id"])
+                sid = int(match["skill_id"])
+                sname = match["skill"]
+                teacher_name = match["name"]
+                level = match.get("level") or "Not set"
+                rating = match.get("rating", 0)
+                availability = ", ".join(match.get("availability", [])) or "-"
+                iid = f"{teacher_id}-{sid}"
+                rows_holder[iid] = (teacher_id, teacher_name, sid, sname, level)
+                t.insert("", "end", iid=iid, values=(teacher_name, sname, level, rating, availability))
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror("Connection error", f"Could not load peers from the database.\n{exc}")
+        except (ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror("Error", f"Unexpected peer response: {exc}")
     Button(bar, text="Search", command=load).grid(row=1, column=3, padx=(4, 0))
     load()
     def request_session():
@@ -254,30 +373,60 @@ def page_browse():
         dur = ttk.Combobox(f, values=["1", "2"], state="readonly", width=5)
         dur.set("1")
         dur.pack(anchor="w")
+        
         def confirm():
+            print("BOOK BUTTON CLICKED")
             date, tm = e_date.get().strip(), e_time.get().strip()
             try:
                 when = datetime.strptime(f"{date} {tm}", "%Y-%m-%d %H:%M")
             except ValueError:
                 return messagebox.showerror("Invalid", "Use date YYYY-MM-DD and time HH:MM.")
+
             if when < datetime.now():
                 return messagebox.showerror("Invalid", "Choose a future date and time.")
-            h = int(dur.get())
-            bal = MOCK_DB["users"][uid]["credits"]
-            if bal < h:
-                return messagebox.showerror("Not enough credits", f"You have {bal} available.")
-            for b in MOCK_DB["bookings"]:
-                if b["status"] not in ("pending", "confirmed"):
-                    continue
-                if {uid, tid} & {b["learner"], b["teacher"]} and overlaps(date, tm, h, b):
-                    return messagebox.showerror("Conflict", "You or the tutor already have a booking that overlaps this time.")
-            MOCK_DB["users"][uid]["credits"] -= h        # NEW: lock credits in escrow
-            MOCK_DB["bookings"].append({"id": MOCK_DB["next_id"], "learner": uid, "teacher": tid, "skill": sid,
-                                        "date": date, "time": tm, "hours": h, "status": "pending"})
-            MOCK_DB["next_id"] += 1
-            win.destroy()
-            messagebox.showinfo("Booked", f"{h} credit(s) placed in escrow. Waiting for {tname} to confirm.")
-            goto("browse", page_browse)
+
+            try:
+                h = int(dur.get())
+            except (ValueError, TypeError):
+                return messagebox.showerror("Invalid", "Choose a valid duration.")
+
+            if h <= 0:
+                return messagebox.showerror("Invalid", "Duration must be greater than zero.")
+
+            try:
+                response = requests.post(
+                    f"{API_URL}/bookings",
+                    json={
+                        "student_id": state["uid"] - 1000,
+                        "tutor_id": tid,
+                        "skill_id": sid,
+                        "date": date,
+                        "start_time": tm,
+                        "duration": h
+                    },
+                    timeout=10
+                )
+
+                if response.status_code not in (200, 201):
+                    try:
+                        detail = response.json().get("detail", "Could not create booking.")
+                    except ValueError:
+                        detail = f"Booking failed (HTTP {response.status_code})."
+                    return messagebox.showerror("Booking failed", str(detail))
+
+                win.destroy()
+                messagebox.showinfo(
+                    "Booked",
+                    f"{h} credit(s) reserved. Waiting for {tname} to confirm."
+                )
+                goto("browse", page_browse)
+
+            except requests.exceptions.RequestException as exc:
+                messagebox.showerror(
+                    "Connection error",
+                    f"Could not save the booking.\n{exc}"
+                )
+
         Button(f, text="Book (places credits in escrow)", bg="sky blue", command=confirm).pack(fill="x", pady=(12, 4))
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
     Button(body, text="Book session", bg="sky blue", activebackground="yellow", command=request_session).pack(anchor="w")
@@ -285,31 +434,76 @@ def page_browse():
 # MY SKILLS 
 def page_myskills():
     title_lbl.config(text="My skills")
-    uid = state["uid"]
+    db_uid = state.get("db_uid")
     f = Frame(body, bg=BG)
     f.pack(anchor="w", fill="x")
+
     Label(f, text="Skill", bg=BG, fg=MUTED).grid(row=0, column=0, sticky="w")
-    cs = ttk.Combobox(f, values=[f"{k} - {v}" for k, v in MOCK_DB["skills"].items()], state="readonly", width=20)
+    cs = ttk.Combobox(f, state="readonly", width=24)
     cs.grid(row=1, column=0, pady=(2, 10), sticky="w")
+
     Label(f, text="Type", bg=BG, fg=MUTED).grid(row=0, column=1, sticky="w", padx=(16, 0))
     ct = ttk.Combobox(f, values=["Offered", "Requested"], state="readonly", width=12)
     ct.set("Offered")
     ct.grid(row=1, column=1, pady=(2, 10), sticky="w", padx=(16, 0))
+
     Label(f, text="Level (if offered)", bg=BG, fg=MUTED).grid(row=0, column=2, sticky="w", padx=(16, 0))
     cl = ttk.Combobox(f, values=["Beginner", "Intermediate", "Expert"], state="readonly", width=14)
     cl.set("Intermediate")
     cl.grid(row=1, column=2, pady=(2, 10), sticky="w", padx=(16, 0))
+
+    skill_lookup = {}
+    def load_skills():
+        try:
+            response = requests.get(f"{API_URL}/skills", timeout=5)
+            response.raise_for_status()
+            rows = response.json()
+            skill_lookup.clear()
+            for row in rows:
+                label = row["skill_name"]
+                skill_lookup[label] = row
+            cs["values"] = list(skill_lookup.keys())
+            response = requests.get(f"{API_URL}/users/{db_uid}/skills", timeout=5)
+            response.raise_for_status()
+            user_skills = response.json()
+            for widget in (t1, t2):
+                for item in widget.get_children():
+                    widget.delete(item)
+            for i, row in enumerate(user_skills):
+                label = row["skill_name"]
+                if row["skill_type"] == "offered":
+                    t1.insert("", "end", iid=f"offered-{i}", values=(label, row.get("level") or "Not set"))
+                else:
+                    t2.insert("", "end", iid=f"requested-{i}", values=(label,))
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror("Connection error", f"Could not load skills from the database.\\n{exc}")
+        except (ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror("Error", f"Unexpected skills response: {exc}")
+
     def add():
+        if not db_uid:
+            return messagebox.showerror("Login required", "Please log in again.")
         if not cs.get():
             return messagebox.showwarning("Pick a skill", "Choose a skill first.")
-        sid = int(cs.get().split(" - ")[0])
+        skill = skill_lookup.get(cs.get())
+        if not skill:
+            return messagebox.showerror("Error", "Please select a valid skill.")
         typ = ct.get().lower()
-        level = cl.get() if typ == "offered" else "-"
-        if any(u == uid and s == sid and t == typ for u, s, t, _ in MOCK_DB["user_skills"]):
-            return messagebox.showwarning("Already added", f"You already have this skill as {typ}.")
-        MOCK_DB["user_skills"].append((uid, sid, typ, level))
-        messagebox.showinfo("Added", f"Added to your {typ} skills.")
-        goto("myskills", page_myskills)
+        payload = {"skill_name": skill["skill_name"], "skill_type": typ, "category": skill.get("category", "General"), "level": cl.get() if typ == "offered" else None}
+        try:
+            response = requests.post(f"{API_URL}/users/{db_uid}/skills", json=payload, timeout=5)
+            if response.status_code in (200, 201):
+                messagebox.showinfo("Added", f"Added to your {typ} skills and saved to the database.")
+                load_skills()
+            else:
+                try:
+                    detail = response.json().get("detail", "Could not add skill")
+                except ValueError:
+                    detail = f"Could not add skill (HTTP {response.status_code})"
+                messagebox.showerror("Could not add skill", str(detail))
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror("Connection error", f"Could not save skill.\\n{exc}")
+
     Button(body, text="Add", bg="sky blue", command=add).pack(anchor="w", pady=(0, 10))
     cols_frame = Frame(body, bg=BG)
     cols_frame.pack(fill="both", expand=True)
@@ -319,119 +513,265 @@ def page_myskills():
     t1 = ttk.Treeview(offered, columns=("skill", "level"), show="headings", height=6)
     t1.heading("skill", text="Skill")
     t1.heading("level", text="Level")
-    for i, (u, s, typ, lvl) in enumerate(MOCK_DB["user_skills"]):
-        if u == uid and typ == "offered":
-            t1.insert("", "end", iid=i, values=(MOCK_DB["skills"][s], lvl))
     t1.pack(fill="both", expand=True)
+
     requested = Frame(cols_frame, bg=BG)
     requested.pack(side="left", fill="both", expand=True)
     Label(requested, text="Requested (help needed)", bg=BG, fg=TEXT, font=FONT_B).pack(anchor="w")
     t2 = ttk.Treeview(requested, columns=("skill",), show="headings", height=6)
     t2.heading("skill", text="Skill")
-    for i, (u, s, typ, lvl) in enumerate(MOCK_DB["user_skills"]):
-        if u == uid and typ == "requested":
-            t2.insert("", "end", iid=i, values=(MOCK_DB["skills"][s],))
     t2.pack(fill="both", expand=True)
+
+    load_skills()
 # MY SESSIONS 
+
 def page_sessions():
     title_lbl.config(text="My sessions")
-    uid = state["uid"]
-    rows = [s for s in MOCK_DB["bookings"] if uid in (s["learner"], s["teacher"])]
-    rows.sort(key=lambda r: -r["id"])
+    db_uid = state.get("db_uid")
+
+    if not db_uid:
+        messagebox.showerror("Login required", "Please log in again.")
+        return
+
     cols = ("learner", "teacher", "skill", "date", "time", "hours", "status")
     t = ttk.Treeview(body, columns=cols, show="headings", height=9)
+
     for c in cols:
         t.heading(c, text=c.title())
-        t.column(c, width=95)
-    for s in rows:
-        t.insert("", "end", iid=s["id"], values=(MOCK_DB["users"][s["learner"]]["name"], MOCK_DB["users"][s["teacher"]]["name"],
-                 MOCK_DB["skills"][s["skill"]], s["date"], s["time"], s["hours"], s["status"].title()))
+        t.column(c, width=110)
+
     t.pack(fill="both", expand=True, pady=8)
+
     legend = Frame(body, bg=BG)
     legend.pack(anchor="w", pady=(0, 8))
-    for s in STATUS_BG:
-        Label(legend, text=f"  {s.title()}  ", bg=STATUS_BG[s], fg=STATUS_FG[s], font=("Segoe UI", 9, "bold")).pack(side="left", padx=(0, 6))
-    by_id = {s["id"]: s for s in rows}
-    def act(fn):
-        sel = t.selection()
-        if not sel:
-            return messagebox.showwarning("Pick a session", "Select a row first.")
-        fn(by_id[int(sel[0])])
-    def do_confirm(s):
-        if s["teacher"] == uid and s["status"] == "pending":
-            s["status"] = "confirmed"
-            goto("sessions", page_sessions)
-        else:
-            messagebox.showwarning("Not allowed", "Only the teacher can confirm a pending session.")
-    def do_complete(s):
-        if s["learner"] != uid or s["status"] != "confirmed":
-            return messagebox.showwarning("Not allowed", "Only the learner can complete a confirmed session.")
-        MOCK_DB["users"][s["teacher"]]["credits"] += s["hours"]
-        MOCK_DB["transactions"].append({"from": uid, "to": s["teacher"], "amount": s["hours"], "date": "today", "type": "escrow_release"})
-        s["status"] = "completed"
-        messagebox.showinfo("Done", f"{s['hours']} credit(s) released to {MOCK_DB['users'][s['teacher']]['name']}.")
-        goto("sessions", page_sessions)
-    def do_dispute(s):
-        if s["status"] == "completed":
-            return messagebox.showwarning("Not allowed", "Cannot dispute a completed session.")
+
+    for status in STATUS_BG:
+        Label(
+            legend,
+            text=f"  {status.title()}  ",
+            bg=STATUS_BG[status],
+            fg=STATUS_FG[status],
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left", padx=(0, 6))
+
+    rows_by_id = {}
+
+    def load_sessions():
+        for item in t.get_children():
+            t.delete(item)
+        rows_by_id.clear()
+
+        try:
+            response = requests.get(
+                f"{API_URL}/users/{db_uid}/bookings",
+                timeout=5
+            )
+            response.raise_for_status()
+            rows = response.json()
+
+            for s in rows:
+                rows_by_id[s["id"]] = s
+                t.insert(
+                    "",
+                    "end",
+                    iid=str(s["id"]),
+                    values=(
+                        s["learner"],
+                        s["tutor"],
+                        s["skill"],
+                        s["date"],
+                        s["time"],
+                        s["hours"],
+                        s["status"].title()
+                    )
+                )
+
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror(
+                "Connection error",
+                f"Could not load sessions:\n{exc}"
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            messagebox.showerror(
+                "Error",
+                f"Unexpected sessions response:\n{exc}"
+            )
+
+    def selected_session():
+        selected = t.selection()
+        if not selected:
+            messagebox.showwarning(
+                "Select session",
+                "Please select a session first."
+            )
+            return None
+        return rows_by_id.get(int(selected[0]))
+
+    def post_action(session, action, payload):
+        try:
+            response = requests.post(
+                f"{API_URL}/bookings/{session['id']}/{action}",
+                json=payload,
+                timeout=5
+            )
+
+            if response.ok:
+                messagebox.showinfo(
+                    "Success",
+                    response.json().get("message", "Session updated.")
+                )
+                load_sessions()
+                return True
+
+            try:
+                detail = response.json().get("detail", "Request failed")
+            except ValueError:
+                detail = f"Request failed (HTTP {response.status_code})"
+
+            messagebox.showerror("Could not update session", str(detail))
+
+        except requests.exceptions.RequestException as exc:
+            messagebox.showerror("Connection error", str(exc))
+
+        return False
+
+    def confirm_session():
+        s = selected_session()
+        if not s:
+            return
+        if s["tutor_id"] != db_uid or s["status"] != "pending":
+            return messagebox.showwarning(
+                "Not allowed",
+                "Only the tutor can confirm a pending session."
+            )
+        post_action(s, "confirm", {"user_id": db_uid})
+
+    def complete_session():
+        s = selected_session()
+        if not s:
+            return
+        if s["learner_id"] != db_uid or s["status"] != "confirmed":
+            return messagebox.showwarning(
+                "Not allowed",
+                "Only the learner can complete a confirmed session."
+            )
+        post_action(s, "complete", {"user_id": db_uid})
+
+    def cancel_session():
+        s = selected_session()
+        if not s:
+            return
+        if s["status"] not in ("pending", "confirmed"):
+            return messagebox.showwarning(
+                "Not allowed",
+                "Only pending or confirmed sessions can be cancelled."
+            )
+        post_action(s, "cancel", {"user_id": db_uid})
+
+    def dispute_session():
+        s = selected_session()
+        if not s:
+            return
+        if s["status"] not in ("pending", "confirmed"):
+            return messagebox.showwarning(
+                "Not allowed",
+                "This session cannot be disputed."
+            )
+
         win = Toplevel(top, bg=PANEL)
         win.title("Report an issue")
+
         f = Frame(win, bg=PANEL, padx=20, pady=16)
         f.pack()
-        Label(f, text=f"Session #{s['id']}", bg=PANEL, fg=TEXT, font=FONT_B).pack(anchor="w")
-        Label(f, text="What happened?", bg=PANEL, fg=MUTED).pack(anchor="w", pady=(8, 2))
+
+        Label(f, text="What happened?", bg=PANEL).pack(anchor="w")
         reason = Text(f, width=34, height=4)
         reason.pack()
+
         def submit():
-            r = reason.get("1.0", "end").strip()
-            if not r:
-                return messagebox.showerror("Invalid", "Describe the issue first.")
-            MOCK_DB["disputes"].append({"booking_id": s["id"], "by": uid, "reason": r, "status": "open"})
-            s["status"] = "disputed"
-            win.destroy()
-            messagebox.showinfo("Reported", "Dispute submitted. Credits stay in escrow until resolved.")
-            goto("sessions", page_sessions)
-        Button(f, text="Submit dispute", bg="sky blue", command=submit).pack(fill="x", pady=(10, 4))
+            text = reason.get("1.0", "end").strip()
+            if not text:
+                return messagebox.showerror(
+                    "Invalid", "Describe the issue first."
+                )
+
+            if post_action(
+                s,
+                "dispute",
+                {"user_id": db_uid, "reason": text}
+            ):
+                win.destroy()
+
+        Button(
+            f, text="Submit dispute",
+            command=submit, bg="sky blue"
+        ).pack(fill="x", pady=8)
+
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
-    def do_review(s):
-        if s["learner"] != uid or s["status"] != "completed":
-            return messagebox.showwarning("Not allowed", "You can only review your own completed sessions.")
-        if any(r["booking_id"] == s["id"] for r in MOCK_DB["reviews"]):
-            return messagebox.showwarning("Already reviewed", "You already reviewed this session.")
+
+    def review_session():
+        s = selected_session()
+        if not s:
+            return
+        if s["learner_id"] != db_uid or s["status"] != "completed":
+            return messagebox.showwarning(
+                "Not allowed",
+                "Only the learner can review a completed session."
+            )
+        if s.get("reviewed"):
+            return messagebox.showwarning(
+                "Already reviewed",
+                "This session already has a review."
+            )
+
         win = Toplevel(top, bg=PANEL)
         win.title("Rate your tutor")
+
         f = Frame(win, bg=PANEL, padx=20, pady=16)
         f.pack()
-        Label(f, text=f"Rate {MOCK_DB['users'][s['teacher']]['name']}", bg=PANEL, fg=TEXT, font=FONT_B).pack(anchor="w")
-        rating = ttk.Combobox(f, values=["1", "2", "3", "4", "5"], state="readonly", width=5)
+
+        Label(f, text=f"Rate {s['tutor']}", bg=PANEL).pack(anchor="w")
+
+        rating = ttk.Combobox(
+            f, values=["1", "2", "3", "4", "5"],
+            state="readonly", width=5
+        )
         rating.set("5")
-        rating.pack(anchor="w", pady=(8, 2))
+        rating.pack(anchor="w", pady=6)
+
         comment = Entry(f, width=34)
-        comment.pack(anchor="w", pady=(4, 0))
+        comment.pack(anchor="w")
+
         def submit():
-            rt = int(rating.get())
-            tutor = MOCK_DB["users"][s["teacher"]]
-            tutor["rating"] = round((tutor["rating"] * tutor["rating_count"] + rt) / (tutor["rating_count"] + 1), 2)
-            tutor["rating_count"] += 1
-            MOCK_DB["reviews"].append({"booking_id": s["id"], "rating": rt, "comment": comment.get()})
-            win.destroy()
-            messagebox.showinfo("Thanks", "Review submitted.")
-        Button(f, text="Submit review", bg="sky blue", command=submit).pack(fill="x", pady=(10, 4))
+            if post_action(
+                s,
+                "rating",
+                {
+                    "user_id": db_uid,
+                    "rating": float(rating.get()),
+                    "comment": comment.get().strip()
+                }
+            ):
+                win.destroy()
+
+        Button(
+            f, text="Submit review",
+            command=submit, bg="sky blue"
+        ).pack(fill="x", pady=8)
+
         Button(f, text="Cancel", command=win.destroy).pack(fill="x")
-    def do_cancel(s):
-        if s["learner"] != uid or s["status"] != "pending":
-            return messagebox.showwarning("Not allowed", "Only the learner can cancel a pending session.")
-        MOCK_DB["users"][uid]["credits"] += s["hours"]
-        s["status"] = "cancelled"
-        messagebox.showinfo("Cancelled", f"{s['hours']} credit(s) refunded.")
-        goto("sessions", page_sessions)
+
     bar = Frame(body, bg=BG)
     bar.pack(anchor="w")
-    Button(bar, text="Confirm", command=lambda: act(do_confirm)).pack(side="left", padx=(0, 6))
-    Button(bar, text="Mark completed", bg="sky blue", command=lambda: act(do_complete)).pack(side="left", padx=(0, 6))
-    Button(bar, text="Report issue", fg="#A8382E", command=lambda: act(do_dispute)).pack(side="left", padx=(0, 6))
-    Button(bar, text="Review", command=lambda: act(do_review)).pack(side="left")
-    Button(bar, text="Cancel", command=lambda: act(do_cancel)).pack(side="left", padx=(6, 0))
+
+    Button(bar, text="Confirm", command=confirm_session).pack(side="left", padx=(0, 6))
+    Button(bar, text="Mark completed", command=complete_session, bg="sky blue").pack(side="left", padx=(0, 6))
+    Button(bar, text="Report issue", command=dispute_session).pack(side="left", padx=(0, 6))
+    Button(bar, text="Review", command=review_session).pack(side="left")
+    Button(bar, text="Cancel", command=cancel_session).pack(side="left", padx=(6, 0))
+
+    load_sessions()
+
 # WALLET 
 def page_wallet():
     title_lbl.config(text="Wallet")
